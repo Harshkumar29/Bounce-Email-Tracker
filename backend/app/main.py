@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from . import models, schemas
 from .crypto import decrypt_token, encrypt_token
 from .db import Base, SessionLocal, engine, get_db
+from .mailer import send_campaign_background
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -92,7 +93,11 @@ def list_campaigns(db: Session = Depends(get_db)):
 
 
 @app.post("/api/campaigns", response_model=schemas.CampaignOut, status_code=201)
-def create_campaign(payload: schemas.CampaignCreate, db: Session = Depends(get_db)):
+def create_campaign(
+    payload: schemas.CampaignCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     campaign = models.Campaign(
         campaign_name=payload.campaignName,
         from_email=payload.fromEmail,
@@ -109,6 +114,12 @@ def create_campaign(payload: schemas.CampaignCreate, db: Session = Depends(get_d
 
     db.commit()
     db.refresh(campaign)
+
+    # Fire the actual SMTP send in the background — the HTTP response
+    # returns immediately, and sending happens right after, in-process.
+    # No manual send_campaign.py step needed for the normal UI flow.
+    background_tasks.add_task(send_campaign_background, campaign.id, PUBLIC_BASE_URL)
+
     return campaign_to_out(campaign)
 
 

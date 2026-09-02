@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bounce Email Tracker</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="container hero-inner">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span>Bounce Email Tracker</span>
+      </div>
+      <h1>Design, schedule &amp; track your campaign emails</h1>
+      <p class="subtitle">
+        Create an email template with multiple trigger windows, then watch every
+        generated campaign land in the tracker table below — all running locally.
+      </p>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="template" class="card">
+      <div class="card-header">
+        <h2>Email Template</h2>
+        <p>Fill in the campaign details. Each trigger row schedules an independent mail run.</p>
+      </div>
+
+      <form id="campaign-form" novalidate>
+        <div class="field">
+          <label for="campaignName">Campaign Name <span class="req">*</span></label>
+          <input type="text" id="campaignName" name="campaignName" placeholder="e.g. Q3 Re-engagement Blast" required />
+          <small class="error" data-error-for="campaignName"></small>
+        </div>
+
+        <div class="field">
+          <label for="fromEmail">From Email <span class="req">*</span></label>
+          <input type="email" id="fromEmail" name="fromEmail" placeholder="sender@company.com" required />
+          <small class="error" data-error-for="fromEmail"></small>
+        </div>
+
+        <div class="recipients">
+          <div class="triggers-heading">
+            <h3>To Emails <span class="req">*</span></h3>
+            <span class="hint">Add as many recipients as you need</span>
+          </div>
+
+          <div id="recipient-list" class="recipient-list">
+            <div class="recipient-row" data-recipient-row>
+              <input type="email" class="recipient-input" placeholder="recipient@example.com" />
+              <button type="button" class="icon-btn remove-btn" data-remove title="Remove recipient">&minus;</button>
+              <button type="button" class="icon-btn add-btn" data-add title="Add recipient">&plus;</button>
+            </div>
+          </div>
+
+          <small class="error" data-error-for="toEmails"></small>
+        </div>
+
+        <div class="field">
+          <label for="body">Email Body <span class="req">*</span></label>
+          <textarea id="body" name="body" rows="8" placeholder="Write the email content here..." required></textarea>
+          <small class="error" data-error-for="body"></small>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" id="submit-btn">Create Campaign</button>
+          <span id="form-status" class="form-status" role="status"></span>
+        </div>
+      </form>
+    </section>
+
+    <section id="tracker" class="card">
+      <div class="card-header">
+        <h2>Campaign Tracker</h2>
+        <p>Every campaign generated from the template above appears here in real time. Click a row to see per-recipient delivery/open/click tracking.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table id="tracker-table">
+          <thead>
+            <tr>
+              <th>Campaign Name</th>
+              <th>From Email</th>
+              <th>Recipients</th>
+              <th>Delivered</th>
+              <th>Opened</th>
+              <th>Bounced</th>
+              <th>Created At</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tracker-body">
+            <tr class="empty-row"><td colspan="8">Loading campaigns…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="detail-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h3 id="modal-title">Campaign detail</h3>
+          <p id="modal-subtitle" class="modal-subtitle"></p>
+        </div>
+        <button type="button" id="modal-close" class="icon-btn" title="Close">&times;</button>
+      </div>
+      <div class="table-wrap">
+        <table id="detail-table">
+          <thead>
+            <tr>
+              <th>Recipient Email</th>
+              <th>Delivered</th>
+              <th>Opened</th>
+              <th>Not Opened</th>
+              <th>Link Clicked</th>
+              <th>Bounced</th>
+              <th>Unsubscribed</th>
+              <th>Spam</th>
+            </tr>
+          </thead>
+          <tbody id="detail-body"></tbody>
+        </table>
+      </div>
+      <p class="modal-note">
+        <strong>Spam</strong> reflects an ISP feedback-loop complaint reported back via webhook — it is <em>Partial</em> (unknown) until such a report arrives; landing in the spam folder cannot otherwise be observed. See SETUP.md.
+      </p>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <div class="container">Running locally &middot; localhost</div>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Secrets — never commit
+backend/.env
+backend/.tracking_secret
+python-sender/.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime / local state
+*.log
+python-sender/.bounce_poller_state.json
+
+# Salesforce CLI local org metadata (not project source)
+.sf/
+
+# OS
+.DS_Store
+Thumbs.db

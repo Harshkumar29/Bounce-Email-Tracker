@@ -1,0 +1,99 @@
+{
+  "info": {
+    "name": "Bounce Email Tracker API (Neon-backed)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3000" },
+    { "key": "api_key", "value": "dev-local-api-key" },
+    { "key": "campaign_id", "value": "" },
+    { "key": "recipient_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "List campaigns",
+      "request": { "method": "GET", "url": "{{base_url}}/api/campaigns" }
+    },
+    {
+      "name": "Create campaign",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/api/campaigns",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"campaignName\": \"Postman Test Campaign\",\n  \"fromEmail\": \"alerts@company.com\",\n  \"toEmails\": [\"user1@example.com\", \"user2@example.com\"],\n  \"body\": \"Hello from Postman! Visit https://example.com\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Get campaign detail",
+      "request": { "method": "GET", "url": "{{base_url}}/api/campaigns/{{campaign_id}}" }
+    },
+    {
+      "name": "Delete campaign",
+      "request": { "method": "DELETE", "url": "{{base_url}}/api/campaigns/{{campaign_id}}" }
+    },
+    {
+      "name": "Export campaign (API key required)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "x-api-key", "value": "{{api_key}}" }],
+        "url": "{{base_url}}/api/campaigns/{{campaign_id}}/export"
+      }
+    },
+    {
+      "name": "Report delivered",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "x-api-key", "value": "{{api_key}}" }],
+        "url": "{{base_url}}/api/campaigns/{{campaign_id}}/recipients/{{recipient_id}}/delivered"
+      }
+    },
+    {
+      "name": "Report bounced",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "x-api-key", "value": "{{api_key}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": "{{base_url}}/api/campaigns/{{campaign_id}}/recipients/{{recipient_id}}/bounced",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"type\": \"hard\",\n  \"reason\": \"550 mailbox not found\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Report spam",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "x-api-key", "value": "{{api_key}}" }],
+        "url": "{{base_url}}/api/campaigns/{{campaign_id}}/recipients/{{recipient_id}}/spam"
+      }
+    },
+    {
+      "name": "Track open (pixel)",
+      "request": { "method": "GET", "url": "{{base_url}}/track/open/PASTE_TOKEN_HERE.gif" }
+    },
+    {
+      "name": "Track click (redirect)",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/track/click/PASTE_TOKEN_HERE?url=https://example.com"
+      }
+    },
+    {
+      "name": "Track unsubscribe",
+      "request": { "method": "GET", "url": "{{base_url}}/track/unsubscribe/PASTE_TOKEN_HERE" }
+    },
+    {
+      "name": "List click logs for a recipient",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/campaigns/{{campaign_id}}/recipients/{{recipient_id}}/clicks"
+      }
+    }
+  ]
+}

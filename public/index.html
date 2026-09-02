@@ -14,7 +14,7 @@
         <span>Bounce Email Tracker</span>
       </div>
 
-      <div class="auth-tabs">
+      <div class="auth-tabs" id="auth-tabs">
         <button type="button" class="auth-tab active" data-auth-tab="login">Log in</button>
         <button type="button" class="auth-tab" data-auth-tab="register">Register</button>
       </div>
@@ -22,28 +22,59 @@
       <form id="login-form" class="auth-form" novalidate>
         <div class="field">
           <label for="loginEmail">Email</label>
-          <input type="email" id="loginEmail" required autocomplete="username" />
+          <input type="email" id="loginEmail" placeholder="you@example.com" required autocomplete="username" />
         </div>
         <div class="field">
           <label for="loginPassword">Password</label>
-          <input type="password" id="loginPassword" required autocomplete="current-password" />
+          <div class="password-wrap">
+            <input type="password" id="loginPassword" placeholder="••••••••" required autocomplete="current-password" />
+            <button type="button" class="toggle-password" data-toggle-for="loginPassword" title="Show/hide password">&#128065;</button>
+          </div>
+          <button type="button" id="forgot-password-link" class="link-btn subtle-link">Forgot password?</button>
         </div>
-        <button type="submit" id="login-btn">Log in</button>
-        <span id="login-status" class="form-status"></span>
+        <button type="submit" id="login-btn"><span class="btn-label">Log in</span></button>
+        <span id="login-status" class="form-status" role="status"></span>
       </form>
 
       <form id="register-form" class="auth-form" novalidate hidden>
         <div class="field">
           <label for="registerEmail">Email</label>
-          <input type="email" id="registerEmail" required autocomplete="username" />
+          <input type="email" id="registerEmail" placeholder="you@example.com" required autocomplete="username" />
         </div>
         <div class="field">
           <label for="registerPassword">Password</label>
-          <input type="password" id="registerPassword" required autocomplete="new-password" minlength="8" />
+          <div class="password-wrap">
+            <input type="password" id="registerPassword" placeholder="At least 8 characters" required autocomplete="new-password" minlength="8" />
+            <button type="button" class="toggle-password" data-toggle-for="registerPassword" title="Show/hide password">&#128065;</button>
+          </div>
           <small class="hint">At least 8 characters</small>
         </div>
-        <button type="submit" id="register-btn">Create account</button>
-        <span id="register-status" class="form-status"></span>
+        <button type="submit" id="register-btn"><span class="btn-label">Create account</span></button>
+        <span id="register-status" class="form-status" role="status"></span>
+      </form>
+
+      <form id="forgot-password-form" class="auth-form" novalidate hidden>
+        <p class="auth-form-intro">Enter your account email — if it exists, we'll send a reset link.</p>
+        <div class="field">
+          <label for="forgotEmail">Email</label>
+          <input type="email" id="forgotEmail" placeholder="you@example.com" required autocomplete="username" />
+        </div>
+        <button type="submit" id="forgot-password-btn"><span class="btn-label">Send reset link</span></button>
+        <button type="button" id="back-to-login-link" class="link-btn subtle-link auth-form-back">&larr; Back to log in</button>
+        <span id="forgot-password-status" class="form-status" role="status"></span>
+      </form>
+
+      <form id="reset-password-form" class="auth-form" novalidate hidden>
+        <p class="auth-form-intro">Choose a new password for your account.</p>
+        <div class="field">
+          <label for="newPassword">New password</label>
+          <div class="password-wrap">
+            <input type="password" id="newPassword" placeholder="At least 8 characters" required autocomplete="new-password" minlength="8" />
+            <button type="button" class="toggle-password" data-toggle-for="newPassword" title="Show/hide password">&#128065;</button>
+          </div>
+        </div>
+        <button type="submit" id="reset-password-btn"><span class="btn-label">Set new password</span></button>
+        <span id="reset-password-status" class="form-status" role="status"></span>
       </form>
     </div>
   </div>

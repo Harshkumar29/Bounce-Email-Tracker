@@ -297,22 +297,53 @@ const authScreen = document.getElementById('auth-screen');
 const appContent = document.getElementById('app-content');
 const currentUserEmailEl = document.getElementById('current-user-email');
 const logoutBtn = document.getElementById('logout-btn');
+const authTabsBar = document.getElementById('auth-tabs');
 
 const loginForm = document.getElementById('login-form');
 const registerForm = document.getElementById('register-form');
+const forgotPasswordForm = document.getElementById('forgot-password-form');
+const resetPasswordForm = document.getElementById('reset-password-form');
 const loginStatus = document.getElementById('login-status');
 const registerStatus = document.getElementById('register-status');
+const forgotPasswordStatus = document.getElementById('forgot-password-status');
+const resetPasswordStatus = document.getElementById('reset-password-status');
 const authTabs = document.querySelectorAll('[data-auth-tab]');
+const allAuthForms = [loginForm, registerForm, forgotPasswordForm, resetPasswordForm];
+
+function showAuthForm(formToShow, { showTabs = true } = {}) {
+  allAuthForms.forEach((f) => (f.hidden = f !== formToShow));
+  authTabsBar.hidden = !showTabs;
+}
 
 authTabs.forEach((tab) => {
   tab.addEventListener('click', () => {
     authTabs.forEach((t) => t.classList.remove('active'));
     tab.classList.add('active');
-    const isLogin = tab.dataset.authTab === 'login';
-    loginForm.hidden = !isLogin;
-    registerForm.hidden = isLogin;
+    showAuthForm(tab.dataset.authTab === 'login' ? loginForm : registerForm);
   });
 });
+
+document.getElementById('forgot-password-link').addEventListener('click', () => {
+  showAuthForm(forgotPasswordForm, { showTabs: false });
+});
+
+document.getElementById('back-to-login-link').addEventListener('click', () => {
+  authTabs.forEach((t) => t.classList.toggle('active', t.dataset.authTab === 'login'));
+  showAuthForm(loginForm);
+});
+
+// Toggle password visibility (eye buttons next to each password field)
+document.querySelectorAll('.toggle-password').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = document.getElementById(btn.dataset.toggleFor);
+    input.type = input.type === 'password' ? 'text' : 'password';
+  });
+});
+
+function setButtonLoading(button, isLoading) {
+  button.disabled = isLoading;
+  button.classList.toggle('loading', isLoading);
+}
 
 function showApp(user) {
   authScreen.hidden = true;
@@ -344,6 +375,8 @@ loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   loginStatus.textContent = '';
   loginStatus.className = 'form-status';
+  const btn = document.getElementById('login-btn');
+  setButtonLoading(btn, true);
   try {
     const res = await fetch('/auth/login', {
       method: 'POST',
@@ -363,6 +396,8 @@ loginForm.addEventListener('submit', async (e) => {
   } catch (err) {
     loginStatus.textContent = 'Network error — is the server running?';
     loginStatus.classList.add('error');
+  } finally {
+    setButtonLoading(btn, false);
   }
 });
 
@@ -370,6 +405,8 @@ registerForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   registerStatus.textContent = '';
   registerStatus.className = 'form-status';
+  const btn = document.getElementById('register-btn');
+  setButtonLoading(btn, true);
   try {
     const res = await fetch('/auth/register', {
       method: 'POST',
@@ -387,11 +424,74 @@ registerForm.addEventListener('submit', async (e) => {
     }
     registerStatus.textContent = 'Account created — log in now.';
     registerStatus.classList.add('success');
-    document.querySelector('[data-auth-tab="login"]').click();
     document.getElementById('loginEmail').value = document.getElementById('registerEmail').value;
+    document.querySelector('[data-auth-tab="login"]').click();
   } catch (err) {
     registerStatus.textContent = 'Network error — is the server running?';
     registerStatus.classList.add('error');
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+
+forgotPasswordForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  forgotPasswordStatus.textContent = '';
+  forgotPasswordStatus.className = 'form-status';
+  const btn = document.getElementById('forgot-password-btn');
+  setButtonLoading(btn, true);
+  try {
+    const res = await fetch('/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.getElementById('forgotEmail').value }),
+    });
+    const data = await res.json();
+    forgotPasswordStatus.textContent = res.ok
+      ? data.message || 'If that email is registered, a reset link has been sent.'
+      : extractErrorMessages(data);
+    forgotPasswordStatus.classList.add(res.ok ? 'success' : 'error');
+  } catch (err) {
+    forgotPasswordStatus.textContent = 'Network error — is the server running?';
+    forgotPasswordStatus.classList.add('error');
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+
+resetPasswordForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  resetPasswordStatus.textContent = '';
+  resetPasswordStatus.className = 'form-status';
+  const btn = document.getElementById('reset-password-btn');
+  setButtonLoading(btn, true);
+  try {
+    const res = await fetch('/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: resetPasswordForm.dataset.token,
+        password: document.getElementById('newPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      resetPasswordStatus.textContent = extractErrorMessages(data);
+      resetPasswordStatus.classList.add('error');
+      return;
+    }
+    resetPasswordStatus.textContent = 'Password updated — log in with your new password.';
+    resetPasswordStatus.classList.add('success');
+    window.history.replaceState({}, '', window.location.pathname);
+    setTimeout(() => {
+      authTabs.forEach((t) => t.classList.toggle('active', t.dataset.authTab === 'login'));
+      showAuthForm(loginForm);
+    }, 1500);
+  } catch (err) {
+    resetPasswordStatus.textContent = 'Network error — is the server running?';
+    resetPasswordStatus.classList.add('error');
+  } finally {
+    setButtonLoading(btn, false);
   }
 });
 
@@ -403,6 +503,20 @@ logoutBtn.addEventListener('click', async () => {
   }
   showAuthScreen();
 });
+
+// If the page was opened from a password-reset email link (?reset_token=...),
+// show that form immediately and skip the normal "already logged in?" check
+// — otherwise a still-valid session elsewhere would jump straight past the
+// reset form into the app.
+function checkForResetToken() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('reset_token');
+  if (!token) return false;
+  resetPasswordForm.dataset.token = token;
+  showAuthForm(resetPasswordForm, { showTabs: false });
+  showAuthScreen();
+  return true;
+}
 
 // ----------------------------------- Email accounts -----------------------------------
 
@@ -499,4 +613,6 @@ emailAccountsList.addEventListener('click', async (e) => {
   }
 })();
 
-checkAuth();
+if (!checkForResetToken()) {
+  checkAuth();
+}

@@ -115,6 +115,35 @@ def _send_one(campaign: models.Campaign, recipient: models.Recipient, tracking_u
     recipient.delivered_at = now_utc()
 
 
+def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
+    """One-off transactional email (password reset, etc.) — separate from
+    the campaign-sending path above since it isn't tracked and has no
+    recipient/token. Returns False (logs, doesn't raise) if SMTP isn't
+    configured or the send fails, so callers can degrade gracefully."""
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = SMTP_USER
+    msg["To"] = to_email
+    msg.set_content(body_text)
+
+    try:
+        if SMTP_USE_TLS:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.login(SMTP_USER, SMTP_PASS)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30) as smtp:
+                smtp.login(SMTP_USER, SMTP_PASS)
+                smtp.send_message(msg)
+        return True
+    except (smtplib.SMTPException, OSError):
+        return False
+
+
 def send_campaign_background(campaign_id: uuid.UUID, public_base_url: str) -> None:
     if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
         return  # misconfigured — leave campaign as "Scheduled"; nothing was sent

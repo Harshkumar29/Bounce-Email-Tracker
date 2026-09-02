@@ -94,6 +94,18 @@ class User(Base):
     )
 
 
+class PasswordResetToken(Base):
+    """Single-use, short-lived token emailed to the user for password reset.
+    Deleted once consumed; expired rows are rejected even if presented."""
+
+    __tablename__ = "password_reset_tokens"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class AppSession(Base):
     """Opaque server-side session token stored in a Secure+HttpOnly cookie.
     DB-backed (not JWT) so logout/revocation is immediate."""

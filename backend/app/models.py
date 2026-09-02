@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -68,6 +69,122 @@ class Recipient(Base):
     click_logs: Mapped[list["ClickLog"]] = relationship(
         back_populates="recipient", cascade="all, delete-orphan"
     )
+
+
+class User(Base):
+    """Application login identity — separate from any mailbox the user
+    later connects (see EmailAccount). One user can own many EmailAccounts."""
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+    email_accounts: Mapped[list["EmailAccount"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class AppSession(Base):
+    """Opaque server-side session token stored in a Secure+HttpOnly cookie.
+    DB-backed (not JWT) so logout/revocation is immediate."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class EmailAccount(Base):
+    """A mailbox a user has connected (or is connecting) via OAuth.
+    UNIQUE(user_id, email_address) stops one user creating duplicates;
+    UNIQUE(provider, provider_account_id) stops the same provider account
+    being linked to two different application users (accidental/malicious
+    account linking — see fastapi_email_authentication_integration.md #21)."""
+
+    __tablename__ = "email_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "normalized_email", name="uq_email_accounts_user_email"),
+        UniqueConstraint("provider", "provider_account_id", name="uq_email_accounts_provider_account"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    email_address: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)  # 'google' | 'microsoft' | ...
+    provider_account_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+    last_authenticated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="email_accounts")
+    oauth_credential: Mapped["OAuthCredential | None"] = relationship(
+        back_populates="email_account", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class OAuthCredential(Base):
+    """Encrypted OAuth tokens for one EmailAccount. Kept in its own table,
+    separate from ordinary email-account metadata, per the integration doc."""
+
+    __tablename__ = "oauth_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("email_accounts.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+    email_account: Mapped["EmailAccount"] = relationship(back_populates="oauth_credential")
+
+
+class OAuthState(Base):
+    """Short-lived CSRF state (+ PKCE verifier) for one in-progress OAuth
+    connect attempt. Row is deleted once consumed by the callback, and
+    expired rows are rejected even if presented."""
+
+    __tablename__ = "oauth_states"
+
+    state: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)
+    requested_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    code_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AuditLog(Base):
+    """Security-sensitive event trail — never store tokens/passwords/codes
+    in `detail`, only descriptive metadata."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class ClickLog(Base):

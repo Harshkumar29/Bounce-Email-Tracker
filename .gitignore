@@ -1,6 +1,7 @@
 # Secrets — never commit
 backend/.env
 backend/.tracking_secret
+backend/.oauth_secret
 python-sender/.env
 
 # Python

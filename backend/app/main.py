@@ -27,6 +27,22 @@ app = FastAPI(title="Bounce Email Tracker API")
 # run every boot). For real migrations later, swap this for Alembic.
 Base.metadata.create_all(bind=engine)
 
+from .routers.auth_router import router as auth_router  # noqa: E402
+from .routers.email_accounts_router import router as email_accounts_router  # noqa: E402
+from .oauth.router import router as oauth_router  # noqa: E402
+from .oauth.providers import GoogleProvider, register_provider  # noqa: E402
+
+app.include_router(auth_router)
+app.include_router(email_accounts_router)
+app.include_router(oauth_router)
+
+_google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
+_google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+if _google_client_id and _google_client_secret:
+    register_provider(GoogleProvider(_google_client_id, _google_client_secret))
+# else: /email-accounts/connect with provider="google" returns a clear 400
+# ("Unknown or unconfigured provider") until GOOGLE_CLIENT_ID/SECRET are set.
+
 TRANSPARENT_GIF = bytes.fromhex(
     "47494638396101000100800000ffffff00000021f90401000000002c00000000010001"
     "000002024401003b"

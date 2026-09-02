@@ -219,9 +219,14 @@ def _find_recipient_by_token(db: Session, token: str) -> Optional[models.Recipie
     return recipient
 
 
-@app.get("/track/open/{token}.gif")
 @app.get("/track/open/{token}")
 def track_open(token: str, db: Session = Depends(get_db)):
+    # Recipients get "<token>.gif" (for mail clients that only embed images
+    # with an image-like extension); strip it before decrypting. Using two
+    # separate route decorators here previously shadowed the token+".gif"
+    # match, so opens were never actually recorded — see git history.
+    if token.endswith(".gif"):
+        token = token[: -len(".gif")]
     recipient = _find_recipient_by_token(db, token)
     if recipient and not recipient.opened:
         recipient.opened = True

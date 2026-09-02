@@ -5,7 +5,6 @@ the PROVIDER's authenticated identity, never the email string the user
 originally typed. If they don't match, the connection is refused outright.
 """
 
-import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from ..auth import get_current_user
+from ..config import PUBLIC_BASE_URL
 from ..crypto import encrypt_secret
 from ..db import get_db
 from .pkce import code_challenge_s256, generate_code_verifier, generate_state
@@ -21,7 +21,6 @@ from .providers import get_provider
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
 
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3000").rstrip("/")
 STATE_LIFETIME = timedelta(minutes=10)
 
 

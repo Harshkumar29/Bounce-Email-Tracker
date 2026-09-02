@@ -1,10 +1,7 @@
-import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
@@ -20,12 +17,10 @@ from ..auth import (
     set_session_cookie,
     verify_password,
 )
+from ..config import PUBLIC_BASE_URL
 from ..db import get_db
 from ..mailer import send_plain_email
 
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3000").rstrip("/")
 RESET_TOKEN_LIFETIME = timedelta(minutes=30)
 
 router = APIRouter(prefix="/auth", tags=["auth"])

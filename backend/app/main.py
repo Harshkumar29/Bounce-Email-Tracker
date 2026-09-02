@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -13,14 +12,10 @@ from sqlalchemy.orm import Session
 
 from . import models, schemas
 from .auth import get_current_user
+from .config import API_KEY, PUBLIC_BASE_URL
 from .crypto import decrypt_token, encrypt_token
 from .db import Base, SessionLocal, engine, get_db
 from .mailer import send_campaign_background
-
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-API_KEY = os.environ.get("API_KEY", "dev-local-api-key")
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:3000").rstrip("/")
 
 app = FastAPI(title="Bounce Email Tracker API")
 

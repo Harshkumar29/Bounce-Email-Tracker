@@ -23,6 +23,12 @@ body {
   color: var(--text);
 }
 
+/* The browser's own [hidden]{display:none} rule is user-agent-priority,
+   so any author rule setting `display` on the same element (e.g.
+   .auth-screen{display:flex}) wins the tie and silently defeats
+   `el.hidden = true`. Force [hidden] to always actually hide. */
+[hidden] { display: none !important; }
+
 .container {
   max-width: 1100px;
   margin: 0 auto;

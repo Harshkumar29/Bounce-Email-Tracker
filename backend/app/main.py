@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models, schemas
+from .auth import get_current_user
 from .crypto import decrypt_token, encrypt_token
 from .db import Base, SessionLocal, engine, get_db
 from .mailer import send_campaign_background
@@ -101,9 +102,11 @@ def campaign_to_out(c: models.Campaign) -> dict:
 
 
 @app.get("/api/campaigns", response_model=list[schemas.CampaignOut])
-def list_campaigns(db: Session = Depends(get_db)):
+def list_campaigns(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     campaigns = db.execute(
-        select(models.Campaign).order_by(models.Campaign.created_at.desc())
+        select(models.Campaign)
+        .where(models.Campaign.user_id == current_user.id)
+        .order_by(models.Campaign.created_at.desc())
     ).scalars().all()
     return [campaign_to_out(c) for c in campaigns]
 
@@ -113,8 +116,10 @@ def create_campaign(
     payload: schemas.CampaignCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     campaign = models.Campaign(
+        user_id=current_user.id,
         campaign_name=payload.campaignName,
         from_email=payload.fromEmail,
         body=payload.body,
@@ -139,19 +144,26 @@ def create_campaign(
     return campaign_to_out(campaign)
 
 
-@app.get("/api/campaigns/{campaign_id}", response_model=schemas.CampaignOut)
-def get_campaign(campaign_id: uuid.UUID, db: Session = Depends(get_db)):
+def _get_owned_campaign(db: Session, campaign_id: uuid.UUID, current_user: models.User) -> models.Campaign:
     campaign = db.get(models.Campaign, campaign_id)
-    if not campaign:
+    if not campaign or campaign.user_id != current_user.id:
+        # 404, not 403 — same ownership-check pattern as email_accounts_router.py
         raise HTTPException(status_code=404, detail="Campaign not found")
-    return campaign_to_out(campaign)
+    return campaign
+
+
+@app.get("/api/campaigns/{campaign_id}", response_model=schemas.CampaignOut)
+def get_campaign(
+    campaign_id: uuid.UUID, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)
+):
+    return campaign_to_out(_get_owned_campaign(db, campaign_id, current_user))
 
 
 @app.delete("/api/campaigns/{campaign_id}")
-def delete_campaign(campaign_id: uuid.UUID, db: Session = Depends(get_db)):
-    campaign = db.get(models.Campaign, campaign_id)
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+def delete_campaign(
+    campaign_id: uuid.UUID, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)
+):
+    campaign = _get_owned_campaign(db, campaign_id, current_user)
     db.delete(campaign)
     db.commit()
     return {"ok": True}

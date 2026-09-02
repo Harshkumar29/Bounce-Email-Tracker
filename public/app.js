@@ -291,4 +291,212 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
-loadCampaigns();
+// ----------------------------------- Auth gate -----------------------------------
+
+const authScreen = document.getElementById('auth-screen');
+const appContent = document.getElementById('app-content');
+const currentUserEmailEl = document.getElementById('current-user-email');
+const logoutBtn = document.getElementById('logout-btn');
+
+const loginForm = document.getElementById('login-form');
+const registerForm = document.getElementById('register-form');
+const loginStatus = document.getElementById('login-status');
+const registerStatus = document.getElementById('register-status');
+const authTabs = document.querySelectorAll('[data-auth-tab]');
+
+authTabs.forEach((tab) => {
+  tab.addEventListener('click', () => {
+    authTabs.forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+    const isLogin = tab.dataset.authTab === 'login';
+    loginForm.hidden = !isLogin;
+    registerForm.hidden = isLogin;
+  });
+});
+
+function showApp(user) {
+  authScreen.hidden = true;
+  appContent.hidden = false;
+  currentUserEmailEl.textContent = user.email;
+  loadCampaigns();
+  loadEmailAccounts();
+}
+
+function showAuthScreen() {
+  authScreen.hidden = false;
+  appContent.hidden = true;
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch('/auth/me');
+    if (res.ok) {
+      showApp(await res.json());
+    } else {
+      showAuthScreen();
+    }
+  } catch (err) {
+    showAuthScreen();
+  }
+}
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loginStatus.textContent = '';
+  loginStatus.className = 'form-status';
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('loginEmail').value,
+        password: document.getElementById('loginPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      loginStatus.textContent = extractErrorMessages(data);
+      loginStatus.classList.add('error');
+      return;
+    }
+    showApp(data);
+  } catch (err) {
+    loginStatus.textContent = 'Network error — is the server running?';
+    loginStatus.classList.add('error');
+  }
+});
+
+registerForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  registerStatus.textContent = '';
+  registerStatus.className = 'form-status';
+  try {
+    const res = await fetch('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('registerEmail').value,
+        password: document.getElementById('registerPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      registerStatus.textContent = extractErrorMessages(data);
+      registerStatus.classList.add('error');
+      return;
+    }
+    registerStatus.textContent = 'Account created — log in now.';
+    registerStatus.classList.add('success');
+    document.querySelector('[data-auth-tab="login"]').click();
+    document.getElementById('loginEmail').value = document.getElementById('registerEmail').value;
+  } catch (err) {
+    registerStatus.textContent = 'Network error — is the server running?';
+    registerStatus.classList.add('error');
+  }
+});
+
+logoutBtn.addEventListener('click', async () => {
+  try {
+    await fetch('/auth/logout', { method: 'POST' });
+  } catch (err) {
+    /* ignore */
+  }
+  showAuthScreen();
+});
+
+// ----------------------------------- Email accounts -----------------------------------
+
+const connectForm = document.getElementById('connect-form');
+const emailAccountsList = document.getElementById('email-accounts-list');
+const emailAccountsMessage = document.getElementById('email-accounts-message');
+
+async function loadEmailAccounts() {
+  try {
+    const res = await fetch('/email-accounts');
+    if (!res.ok) return;
+    const accounts = await res.json();
+    if (!accounts.length) {
+      emailAccountsList.innerHTML = '<li class="email-account-row" style="justify-content:center;color:var(--muted)">No email accounts connected yet.</li>';
+      return;
+    }
+    emailAccountsList.innerHTML = accounts
+      .map(
+        (a) => `
+        <li class="email-account-row" data-id="${a.id}">
+          <span>${escapeHtml(a.email_address)}<span class="provider-tag">${escapeHtml(a.provider)} · ${a.is_verified ? 'Verified' : 'Pending'}</span></span>
+          <button type="button" class="delete-btn" data-disconnect="${a.id}">Disconnect</button>
+        </li>`
+      )
+      .join('');
+  } catch (err) {
+    /* ignore */
+  }
+}
+
+connectForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  emailAccountsMessage.textContent = '';
+  emailAccountsMessage.className = 'form-status';
+  const email = document.getElementById('connectEmail').value.trim();
+  const provider = document.getElementById('connectProvider').value;
+
+  try {
+    const res = await fetch('/email-accounts/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, provider }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      emailAccountsMessage.textContent = extractErrorMessages(data);
+      emailAccountsMessage.classList.add('error');
+      return;
+    }
+    if (data.status === 'already_connected') {
+      emailAccountsMessage.textContent = `${email} is already connected.`;
+      emailAccountsMessage.classList.add('success');
+      await loadEmailAccounts();
+      return;
+    }
+    if (data.authorization_url) {
+      window.location.href = data.authorization_url;
+    }
+  } catch (err) {
+    emailAccountsMessage.textContent = 'Network error — is the server running?';
+    emailAccountsMessage.classList.add('error');
+  }
+});
+
+emailAccountsList.addEventListener('click', async (e) => {
+  const id = e.target.getAttribute('data-disconnect');
+  if (!id) return;
+  e.target.disabled = true;
+  try {
+    await fetch(`/email-accounts/${id}`, { method: 'DELETE' });
+    await loadEmailAccounts();
+  } catch (err) {
+    e.target.disabled = false;
+  }
+});
+
+// Surface the OAuth callback's redirect result (?connected=... / ?oauth_error=...)
+(function showOAuthRedirectResult() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('connected')) {
+    emailAccountsMessage.textContent = `Connected ${params.get('connected')} successfully.`;
+    emailAccountsMessage.classList.add('success');
+  } else if (params.has('oauth_error')) {
+    const err = params.get('oauth_error');
+    const messages = {
+      identity_mismatch: `You signed in as a different account than the one you tried to connect (requested ${params.get('requested')}, authenticated as ${params.get('authenticated')}).`,
+      already_linked_elsewhere: 'That email is already connected to a different account.',
+    };
+    emailAccountsMessage.textContent = messages[err] || `Connection failed: ${err}`;
+    emailAccountsMessage.classList.add('error');
+  }
+  if (params.has('connected') || params.has('oauth_error')) {
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+})();
+
+checkAuth();

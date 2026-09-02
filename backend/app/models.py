@@ -24,6 +24,11 @@ class Campaign(Base):
     __tablename__ = "campaigns"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Nullable so pre-existing rows created before login was added aren't
+    # orphaned by a NOT NULL migration; every new campaign always sets it.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
     campaign_name: Mapped[str] = mapped_column(String(255), nullable=False)
     from_email: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)

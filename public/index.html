@@ -7,8 +7,54 @@
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <div id="auth-screen" class="auth-screen">
+    <div class="auth-card">
+      <div class="brand brand-center">
+        <span class="brand-dot"></span>
+        <span>Bounce Email Tracker</span>
+      </div>
+
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" data-auth-tab="login">Log in</button>
+        <button type="button" class="auth-tab" data-auth-tab="register">Register</button>
+      </div>
+
+      <form id="login-form" class="auth-form" novalidate>
+        <div class="field">
+          <label for="loginEmail">Email</label>
+          <input type="email" id="loginEmail" required autocomplete="username" />
+        </div>
+        <div class="field">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" required autocomplete="current-password" />
+        </div>
+        <button type="submit" id="login-btn">Log in</button>
+        <span id="login-status" class="form-status"></span>
+      </form>
+
+      <form id="register-form" class="auth-form" novalidate hidden>
+        <div class="field">
+          <label for="registerEmail">Email</label>
+          <input type="email" id="registerEmail" required autocomplete="username" />
+        </div>
+        <div class="field">
+          <label for="registerPassword">Password</label>
+          <input type="password" id="registerPassword" required autocomplete="new-password" minlength="8" />
+          <small class="hint">At least 8 characters</small>
+        </div>
+        <button type="submit" id="register-btn">Create account</button>
+        <span id="register-status" class="form-status"></span>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-content" hidden>
   <header class="hero">
     <div class="container hero-inner">
+      <div class="topbar">
+        <span id="current-user-email"></span>
+        <button type="button" id="logout-btn" class="link-btn">Log out</button>
+      </div>
       <div class="brand">
         <span class="brand-dot"></span>
         <span>Bounce Email Tracker</span>
@@ -22,6 +68,22 @@
   </header>
 
   <main class="container">
+    <section id="email-accounts" class="card">
+      <div class="card-header">
+        <h2>Connected Email Accounts</h2>
+        <p>Connect a mailbox you own so campaigns can be sent through it. Only Google is available so far.</p>
+      </div>
+      <div id="email-accounts-message" class="form-status"></div>
+      <form id="connect-form" class="connect-form" novalidate>
+        <input type="email" id="connectEmail" placeholder="you@gmail.com" required />
+        <select id="connectProvider">
+          <option value="google">Google</option>
+        </select>
+        <button type="submit" id="connect-btn">Connect email</button>
+      </form>
+      <ul id="email-accounts-list" class="email-accounts-list"></ul>
+    </section>
+
     <section id="template" class="card">
       <div class="card-header">
         <h2>Email Template</h2>
@@ -134,6 +196,7 @@
   <footer class="footer">
     <div class="container">Running locally &middot; localhost</div>
   </footer>
+  </div>
 
   <script src="/app.js"></script>
 </body>

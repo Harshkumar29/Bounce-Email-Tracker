@@ -410,6 +410,159 @@ tbody tr:hover { background: #fafbff; }
   padding: 20px 0 40px;
 }
 
+/* ---------- Auth screen ---------- */
+
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+  padding: 24px;
+}
+
+.auth-card {
+  background: #fff;
+  border-radius: var(--radius);
+  padding: 32px 30px;
+  width: 100%;
+  max-width: 380px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+}
+
+.brand-center {
+  justify-content: center;
+  margin: 0 auto 22px;
+  color: var(--primary);
+  background: #eef0fd;
+}
+
+.auth-tabs {
+  display: flex;
+  border-radius: 10px;
+  background: #f1f2f6;
+  padding: 4px;
+  margin-bottom: 20px;
+}
+
+.auth-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 8px 0;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.auth-tab.active {
+  background: #fff;
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.auth-form button[type="submit"] {
+  width: 100%;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 11px 0;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.auth-form button[type="submit"]:hover { background: var(--primary-dark); }
+.auth-form .form-status { display: block; margin-top: 10px; text-align: center; }
+
+/* ---------- Top bar / logout ---------- */
+
+.topbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 14px;
+  font-size: 0.85rem;
+  color: rgba(255,255,255,0.85);
+  margin-bottom: 10px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #fff;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+}
+
+/* ---------- Email accounts ---------- */
+
+.connect-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.connect-form input {
+  flex: 1;
+  min-width: 200px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+.connect-form select {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  background: #fff;
+}
+
+.connect-form button {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.email-accounts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.email-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fafbff;
+  font-size: 0.9rem;
+}
+
+.email-account-row .provider-tag {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-left: 8px;
+}
+
 @media (max-width: 640px) {
   .trigger-row {
     grid-template-columns: 1fr;

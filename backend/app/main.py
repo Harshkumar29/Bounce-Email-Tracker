@@ -71,6 +71,7 @@ def recipient_to_out(r: models.Recipient) -> dict:
         "linkClickedAt": r.link_clicked_at,
         "bounced": r.bounced,
         "bounceType": r.bounce_type,
+        "bounceReason": r.bounce_reason,
         "bouncedAt": r.bounced_at,
         "unsubscribed": r.unsubscribed,
         "unsubscribedAt": r.unsubscribed_at,

@@ -42,6 +42,7 @@ class RecipientOut(BaseModel):
     linkClickedAt: Optional[datetime] = None
     bounced: bool
     bounceType: Optional[str] = None
+    bounceReason: Optional[str] = None
     bouncedAt: Optional[datetime] = None
     unsubscribed: bool
     unsubscribedAt: Optional[datetime] = None

@@ -151,6 +151,9 @@ class EmailAccount(Base):
     oauth_credential: Mapped["OAuthCredential | None"] = relationship(
         back_populates="email_account", cascade="all, delete-orphan", uselist=False
     )
+    smtp_credential: Mapped["SmtpCredential | None"] = relationship(
+        back_populates="email_account", cascade="all, delete-orphan", uselist=False
+    )
 
 
 class OAuthCredential(Base):
@@ -171,6 +174,29 @@ class OAuthCredential(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
     email_account: Mapped["EmailAccount"] = relationship(back_populates="oauth_credential")
+
+
+class SmtpCredential(Base):
+    """Encrypted custom-SMTP credentials for one EmailAccount (provider
+    'smtp') -- a user's own mail server/mailbox, as an alternative to the
+    OAuth-connected path. Password encrypted with the same OAUTH_ENCRYPTION_KEY
+    as OAuthCredential (both are "connected-account secrets")."""
+
+    __tablename__ = "smtp_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("email_accounts.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    smtp_host: Mapped[str] = mapped_column(String(255), nullable=False)
+    smtp_port: Mapped[int] = mapped_column(Integer, default=587)
+    smtp_username: Mapped[str] = mapped_column(String(255), nullable=False)
+    smtp_password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    use_tls: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+    email_account: Mapped["EmailAccount"] = relationship(back_populates="smtp_credential")
 
 
 class OAuthState(Base):

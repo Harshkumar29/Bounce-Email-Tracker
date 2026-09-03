@@ -702,19 +702,20 @@ async function loadEmailAccounts() {
       return;
     }
     emailAccountsList.innerHTML = accounts
-      .map(
-        (a) => `
+      .map((a) => {
+        const detail = a.provider === 'smtp' && a.smtp_host ? `${escapeHtml(a.provider)} &middot; ${escapeHtml(a.smtp_host)}:${a.smtp_port}` : escapeHtml(a.provider);
+        return `
       <li class="py-3 flex items-center justify-between" data-id="${a.id}">
         <div class="flex items-center gap-3">
           <div class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold text-[10px] uppercase">${escapeHtml(a.provider.slice(0, 2))}</div>
           <div>
             <span class="font-medium text-slate-200 text-sm">${escapeHtml(a.email_address)}</span>
-            <span class="text-xs text-slate-400 ml-2">${escapeHtml(a.provider)} &middot; ${a.is_verified ? 'Verified' : 'Pending'}</span>
+            <span class="text-xs text-slate-400 ml-2">${detail} &middot; ${a.is_verified ? 'Verified' : 'Pending'}</span>
           </div>
         </div>
         <button class="text-xs text-rose-400 hover:text-rose-300" data-disconnect="${a.id}">Disconnect</button>
-      </li>`
-      )
+      </li>`;
+      })
       .join('');
   } catch (err) {
     /* ignore */
@@ -750,6 +751,49 @@ connectForm.addEventListener('submit', async (e) => {
   } catch (err) {
     emailAccountsMessage.textContent = 'Network error — is the server running?';
     emailAccountsMessage.classList.add('text-rose-400');
+  }
+});
+
+const smtpForm = document.getElementById('smtp-form');
+
+smtpForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  emailAccountsMessage.textContent = '';
+  emailAccountsMessage.className = 'text-xs min-h-[1em]';
+  const btn = document.getElementById('smtp-connect-btn');
+  setButtonLoading(btn, true, 'Testing connection…');
+
+  const payload = {
+    email: document.getElementById('smtpEmail').value.trim(),
+    smtp_host: document.getElementById('smtpHost').value.trim(),
+    smtp_port: parseInt(document.getElementById('smtpPort').value, 10),
+    smtp_username: document.getElementById('smtpUsername').value.trim(),
+    smtp_password: document.getElementById('smtpPassword').value,
+    use_tls: document.getElementById('smtpTls').checked,
+  };
+
+  try {
+    const res = await fetch('/email-accounts/smtp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      emailAccountsMessage.textContent = extractErrorMessages(data);
+      emailAccountsMessage.classList.add('text-rose-400');
+      return;
+    }
+    showToast(`Connected ${data.email_address} — campaigns from this address will send through it.`, 'success');
+    smtpForm.reset();
+    document.getElementById('smtpPort').value = '587';
+    document.getElementById('smtpTls').checked = true;
+    await loadEmailAccounts();
+  } catch (err) {
+    emailAccountsMessage.textContent = 'Network error — is the server running?';
+    emailAccountsMessage.classList.add('text-rose-400');
+  } finally {
+    setButtonLoading(btn, false);
   }
 });
 

@@ -10,8 +10,12 @@ campaigns); if you ever need this to survive a worker restart mid-send or
 scale to a large recipient list, move this to a real task queue (Celery/RQ)
 instead — a BackgroundTask is fire-and-forget within one process.
 
-Sends over plain SMTP only. Point SMTP_HOST/PORT/USER/PASS (in .env) at
-your own mail server for unrestricted sending — see SETUP.md.
+Sends over plain SMTP. Each user can connect their own mailbox's SMTP
+credentials (see routers/email_accounts_router.py's POST /email-accounts/smtp)
+— a campaign whose From Email matches one of that user's connected SMTP
+accounts sends through those credentials. Falls back to the global
+SMTP_HOST/PORT/USER/PASS in .env if no matching connected account exists,
+so a bare install with no per-user mailboxes still works — see SETUP.md.
 """
 
 import html
@@ -20,29 +24,67 @@ import re
 import smtplib
 import ssl
 import uuid
+from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
+from typing import Optional
 from urllib.parse import quote
 
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 
 from . import models
+from .crypto import decrypt_secret
 from .db import SessionLocal
 from .models import now_utc
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-SMTP_HOST = os.environ.get("SMTP_HOST")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASS = os.environ.get("SMTP_PASS")
-SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "1") != "0"
+DEFAULT_SMTP_HOST = os.environ.get("SMTP_HOST")
+DEFAULT_SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+DEFAULT_SMTP_USER = os.environ.get("SMTP_USER")
+DEFAULT_SMTP_PASS = os.environ.get("SMTP_PASS")
+DEFAULT_SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "1") != "0"
 
 URL_RE = re.compile(r"(https?://[^\s<]+)")
 
 
-def _is_sending_configured() -> bool:
-    return bool(SMTP_HOST and SMTP_USER and SMTP_PASS)
+@dataclass
+class SmtpConfig:
+    host: str
+    port: int
+    username: str
+    password: str
+    use_tls: bool
+
+
+def _default_smtp_config() -> Optional[SmtpConfig]:
+    if not (DEFAULT_SMTP_HOST and DEFAULT_SMTP_USER and DEFAULT_SMTP_PASS):
+        return None
+    return SmtpConfig(DEFAULT_SMTP_HOST, DEFAULT_SMTP_PORT, DEFAULT_SMTP_USER, DEFAULT_SMTP_PASS, DEFAULT_SMTP_USE_TLS)
+
+
+def resolve_smtp_config(db: Session, campaign: models.Campaign) -> Optional[SmtpConfig]:
+    """A user's own connected SMTP mailbox (matched by From Email) takes
+    priority over the install-wide default in .env."""
+    if campaign.user_id:
+        account = (
+            db.query(models.EmailAccount)
+            .filter(
+                models.EmailAccount.user_id == campaign.user_id,
+                models.EmailAccount.normalized_email == campaign.from_email.strip().lower(),
+                models.EmailAccount.provider == "smtp",
+                models.EmailAccount.is_active.is_(True),
+            )
+            .first()
+        )
+        if account and account.smtp_credential:
+            cred = account.smtp_credential
+            password = decrypt_secret(cred.smtp_password_encrypted)
+            if password is not None:
+                return SmtpConfig(cred.smtp_host, cred.smtp_port, cred.smtp_username, password, cred.use_tls)
+
+    return _default_smtp_config()
 
 
 def _wrap_link(match: re.Match, click_base_url: str) -> str:
@@ -82,7 +124,9 @@ def _mark_delivered(recipient: models.Recipient) -> None:
     recipient.delivered_at = now_utc()
 
 
-def _send_via_smtp(campaign: models.Campaign, recipient: models.Recipient, html_body: str) -> None:
+def _send_via_smtp(
+    campaign: models.Campaign, recipient: models.Recipient, html_body: str, config: SmtpConfig
+) -> None:
     msg = EmailMessage()
     msg["Subject"] = campaign.campaign_name
     msg["From"] = campaign.from_email
@@ -91,14 +135,14 @@ def _send_via_smtp(campaign: models.Campaign, recipient: models.Recipient, html_
     msg.add_alternative(html_body, subtype="html")
 
     try:
-        if SMTP_USE_TLS:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+        if config.use_tls:
+            with smtplib.SMTP(config.host, config.port, timeout=30) as smtp:
                 smtp.starttls(context=ssl.create_default_context())
-                smtp.login(SMTP_USER, SMTP_PASS)
+                smtp.login(config.username, config.password)
                 smtp.send_message(msg)
         else:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30) as smtp:
-                smtp.login(SMTP_USER, SMTP_PASS)
+            with smtplib.SMTP_SSL(config.host, config.port, context=ssl.create_default_context(), timeout=30) as smtp:
+                smtp.login(config.username, config.password)
                 smtp.send_message(msg)
 
     except smtplib.SMTPRecipientsRefused as exc:
@@ -115,39 +159,40 @@ def _send_via_smtp(campaign: models.Campaign, recipient: models.Recipient, html_
     _mark_delivered(recipient)
 
 
-def _send_one(campaign: models.Campaign, recipient: models.Recipient, tracking_urls: dict) -> None:
+def _send_one(campaign: models.Campaign, recipient: models.Recipient, tracking_urls: dict, config: SmtpConfig) -> None:
     html_body = build_html_body(
         campaign.body,
         tracking_urls["clickBaseUrl"],
         tracking_urls["unsubscribeUrl"],
         tracking_urls["openPixelUrl"],
     )
-    _send_via_smtp(campaign, recipient, html_body)
+    _send_via_smtp(campaign, recipient, html_body, config)
 
 
 def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
-    """One-off transactional email (password reset, etc.) — separate from
-    the campaign-sending path above since it isn't tracked and has no
-    recipient/token. Returns False (logs, doesn't raise) if SMTP isn't
-    configured or the send fails, so callers can degrade gracefully."""
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+    """One-off transactional email (password reset, etc.) — always uses the
+    install-wide default SMTP config, never a per-user mailbox, since it
+    isn't tied to any campaign/user context. Returns False (logs, doesn't
+    raise) if SMTP isn't configured or the send fails."""
+    config = _default_smtp_config()
+    if not config:
         return False
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = SMTP_USER
+    msg["From"] = config.username
     msg["To"] = to_email
     msg.set_content(body_text)
 
     try:
-        if SMTP_USE_TLS:
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+        if config.use_tls:
+            with smtplib.SMTP(config.host, config.port, timeout=30) as smtp:
                 smtp.starttls(context=ssl.create_default_context())
-                smtp.login(SMTP_USER, SMTP_PASS)
+                smtp.login(config.username, config.password)
                 smtp.send_message(msg)
         else:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=30) as smtp:
-                smtp.login(SMTP_USER, SMTP_PASS)
+            with smtplib.SMTP_SSL(config.host, config.port, context=ssl.create_default_context(), timeout=30) as smtp:
+                smtp.login(config.username, config.password)
                 smtp.send_message(msg)
         return True
     except (smtplib.SMTPException, OSError):
@@ -155,14 +200,15 @@ def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
 
 
 def send_campaign_background(campaign_id: uuid.UUID, public_base_url: str) -> None:
-    if not _is_sending_configured():
-        return  # misconfigured — leave campaign as "Scheduled"; nothing was sent
-
     db = SessionLocal()
     try:
         campaign = db.get(models.Campaign, campaign_id)
         if not campaign:
             return
+
+        config = resolve_smtp_config(db, campaign)
+        if not config:
+            return  # no per-user mailbox and no default configured — leave "Scheduled"
 
         campaign.status = "Sending"
         db.commit()
@@ -173,7 +219,7 @@ def send_campaign_background(campaign_id: uuid.UUID, public_base_url: str) -> No
                 "clickBaseUrl": f"{public_base_url}/track/click/{recipient.token}",
                 "unsubscribeUrl": f"{public_base_url}/track/unsubscribe/{recipient.token}",
             }
-            _send_one(campaign, recipient, tracking_urls)
+            _send_one(campaign, recipient, tracking_urls, config)
             db.commit()
 
         campaign.status = "Sent"

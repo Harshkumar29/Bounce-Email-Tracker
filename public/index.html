@@ -260,24 +260,68 @@
     </section>
 
     <!-- ================= ACCOUNTS ================= -->
-    <section id="view-accounts" class="hidden max-w-3xl mx-auto space-y-8">
+    <section id="view-accounts" class="hidden max-w-5xl mx-auto space-y-8">
       <div>
         <h1 class="text-2xl font-bold text-white tracking-tight">Connected Sender Mailboxes</h1>
-        <p class="text-sm text-slate-400">Connect a mailbox you own so campaigns can be sent through it.</p>
+        <p class="text-sm text-slate-400">Connect a mailbox you own so campaigns can be sent through it, using its own SMTP credentials.</p>
       </div>
 
-      <div class="glass-card rounded-2xl p-6 space-y-4">
-        <h2 class="text-base font-semibold text-white flex items-center gap-2">
-          <i data-lucide="key" class="w-4 h-4 text-blue-400"></i> Connect a Mailbox
-        </h2>
-        <form id="connect-form" class="flex flex-wrap gap-3">
-          <input type="email" id="connectEmail" required class="input-dark flex-1 min-w-[200px]" placeholder="you@gmail.com" />
-          <select id="connectProvider" class="input-dark w-auto">
-            <option value="google">Google</option>
-          </select>
-          <button type="submit" id="connect-btn" class="btn-brand">Connect email</button>
-        </form>
-        <p id="email-accounts-message" class="text-xs min-h-[1em]"></p>
+      <p id="email-accounts-message" class="text-xs min-h-[1em]"></p>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="md:col-span-2 glass-card rounded-2xl p-6 space-y-4">
+          <h2 class="text-base font-semibold text-white flex items-center gap-2">
+            <i data-lucide="server" class="w-4 h-4 text-blue-400"></i> Connect Custom SMTP Mailbox
+          </h2>
+          <form id="smtp-form" class="space-y-4 text-sm">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="label-dark">Sender Email</label>
+                <input type="email" id="smtpEmail" required class="input-dark" placeholder="you@yourdomain.com" />
+              </div>
+              <div>
+                <label class="label-dark">SMTP Username</label>
+                <input type="text" id="smtpUsername" required class="input-dark" placeholder="often same as sender email" />
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-4">
+              <div class="col-span-2">
+                <label class="label-dark">SMTP Host</label>
+                <input type="text" id="smtpHost" required class="input-dark" placeholder="mail.yourdomain.com" />
+              </div>
+              <div>
+                <label class="label-dark">Port</label>
+                <input type="number" id="smtpPort" value="587" required class="input-dark" />
+              </div>
+            </div>
+            <div>
+              <label class="label-dark">SMTP Password</label>
+              <input type="password" id="smtpPassword" required class="input-dark" placeholder="••••••••" />
+            </div>
+            <div class="flex items-center gap-2 pt-1">
+              <input type="checkbox" id="smtpTls" checked class="rounded bg-slate-900 border-slate-700 text-blue-600" />
+              <label for="smtpTls" class="text-xs text-slate-400">Use STARTTLS (recommended, port 587)</label>
+            </div>
+            <button type="submit" id="smtp-connect-btn" class="btn-brand w-full">
+              <span class="btn-label">Test &amp; Connect Mailbox</span>
+            </button>
+          </form>
+        </div>
+
+        <div class="glass-card rounded-2xl p-6 space-y-4 flex flex-col justify-between">
+          <div>
+            <h2 class="text-base font-semibold text-white mb-2">OAuth Connections</h2>
+            <p class="text-xs text-slate-400 mb-4">Link a Google mailbox by identity (doesn't yet change how campaigns send — that still uses SMTP above or the connected SMTP credentials for this address).</p>
+            <form id="connect-form" class="space-y-3">
+              <input type="email" id="connectEmail" required class="input-dark" placeholder="you@gmail.com" />
+              <select id="connectProvider" class="input-dark">
+                <option value="google">Google</option>
+              </select>
+              <button type="submit" id="connect-btn" class="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-semibold transition">Connect Google Account</button>
+            </form>
+          </div>
+          <p class="text-[11px] text-slate-500">Credentials are encrypted at rest.</p>
+        </div>
       </div>
 
       <div class="glass-card rounded-2xl p-6">

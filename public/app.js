@@ -1,56 +1,322 @@
-// --------------------------------- Theme toggle ---------------------------------
+// ==========================================
+// State & helpers
+// ==========================================
 
-(function initTheme() {
-  const stored = (() => {
-    try {
-      return localStorage.getItem('theme');
-    } catch (err) {
-      return null;
-    }
-  })();
-  if (stored === 'light' || stored === 'dark') {
-    document.documentElement.setAttribute('data-theme', stored);
-  }
-
-  function toggleTheme() {
-    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const current = document.documentElement.getAttribute('data-theme') || (prefersDark ? 'dark' : 'light');
-    const next = current === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    try {
-      localStorage.setItem('theme', next);
-    } catch (err) {
-      /* ignore — per-viewer convenience only */
-    }
-  }
-
-  document.querySelectorAll('.theme-toggle').forEach((btn) => btn.addEventListener('click', toggleTheme));
-})();
-
-const form = document.getElementById('campaign-form');
-const submitBtn = document.getElementById('submit-btn');
-const formStatus = document.getElementById('form-status');
-const trackerBody = document.getElementById('tracker-body');
-const recipientList = document.getElementById('recipient-list');
-
-const modal = document.getElementById('detail-modal');
-const modalTitle = document.getElementById('modal-title');
-const modalSubtitle = document.getElementById('modal-subtitle');
-const modalClose = document.getElementById('modal-close');
-const detailBody = document.getElementById('detail-body');
-
+let isAuthed = false;
+let currentUser = null;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// --------------------------- Recipient rows (+/-) ---------------------------
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function extractErrorMessages(data) {
+  if (Array.isArray(data.errors)) return data.errors.join(' · ');
+  if (Array.isArray(data.detail)) return data.detail.map((d) => d.msg || JSON.stringify(d)).join(' · ');
+  if (typeof data.detail === 'string') return data.detail;
+  return 'Something went wrong';
+}
+
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  const color =
+    type === 'error'
+      ? 'bg-rose-500/20 border-rose-500 text-rose-200'
+      : type === 'success'
+      ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200'
+      : 'bg-blue-500/20 border-blue-500 text-blue-200';
+  toast.className = `p-4 rounded-xl border backdrop-blur-md shadow-xl text-sm flex items-center gap-3 ${color} transition-all duration-300`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 4500);
+}
+
+function setButtonLoading(button, isLoading, loadingLabel) {
+  button.disabled = isLoading;
+  const label = button.querySelector('.btn-label');
+  if (isLoading) {
+    button.dataset.originalLabel = label ? label.textContent : '';
+    if (label) label.textContent = loadingLabel || 'Please wait…';
+  } else if (label && button.dataset.originalLabel) {
+    label.textContent = button.dataset.originalLabel;
+  }
+}
+
+function refreshIcons() {
+  if (window.lucide) window.lucide.createIcons();
+}
+
+// ==========================================
+// View navigation (SPA-style)
+// ==========================================
+
+const VIEWS = ['auth', 'dashboard', 'campaigns', 'composer', 'accounts'];
+
+function navigate(viewName) {
+  if (!isAuthed && viewName !== 'auth') viewName = 'auth';
+  VIEWS.forEach((v) => document.getElementById(`view-${v}`).classList.add('hidden'));
+  document.getElementById(`view-${viewName}`).classList.remove('hidden');
+
+  if (viewName === 'dashboard') loadDashboardData();
+  if (viewName === 'campaigns') loadCampaignsData();
+  if (viewName === 'accounts') loadEmailAccounts();
+
+  updateNav();
+  refreshIcons();
+}
+
+function updateNav() {
+  const authActions = document.getElementById('auth-actions');
+  const navLinks = document.getElementById('nav-links');
+
+  if (isAuthed && currentUser) {
+    navLinks.classList.remove('hidden');
+    navLinks.classList.add('flex');
+    authActions.innerHTML = `
+      <span class="text-xs text-slate-300 font-medium hidden sm:inline">${escapeHtml(currentUser.email)}</span>
+      <button id="logout-btn" class="px-3 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition">Log Out</button>
+    `;
+    document.getElementById('logout-btn').addEventListener('click', logout);
+  } else {
+    navLinks.classList.add('hidden');
+    navLinks.classList.remove('flex');
+    authActions.innerHTML = `<button onclick="navigate('auth')" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 font-semibold text-xs transition">Sign In</button>`;
+  }
+}
+
+// ==========================================
+// Auth (cookie-session based — see backend/app/auth.py)
+// ==========================================
+
+async function checkAuth() {
+  try {
+    const res = await fetch('/auth/me');
+    if (res.ok) {
+      currentUser = await res.json();
+      isAuthed = true;
+      navigate('dashboard');
+    } else {
+      isAuthed = false;
+      navigate('auth');
+    }
+  } catch (err) {
+    isAuthed = false;
+    navigate('auth');
+  }
+}
+
+async function logout() {
+  try {
+    await fetch('/auth/logout', { method: 'POST' });
+  } catch (err) {
+    /* ignore */
+  }
+  isAuthed = false;
+  currentUser = null;
+  navigate('auth');
+}
+
+const authTabs = document.querySelectorAll('[data-auth-tab]');
+const loginForm = document.getElementById('login-form');
+const registerForm = document.getElementById('register-form');
+const forgotPasswordForm = document.getElementById('forgot-password-form');
+const resetPasswordForm = document.getElementById('reset-password-form');
+const authTabsBar = document.getElementById('auth-tabs');
+const allAuthForms = [loginForm, registerForm, forgotPasswordForm, resetPasswordForm];
+
+function showAuthForm(formToShow, { showTabs = true } = {}) {
+  allAuthForms.forEach((f) => f.classList.toggle('hidden', f !== formToShow));
+  authTabsBar.classList.toggle('hidden', !showTabs);
+}
+
+authTabs.forEach((tab) => {
+  tab.addEventListener('click', () => {
+    authTabs.forEach((t) => {
+      const active = t === tab;
+      t.classList.toggle('text-blue-400', active);
+      t.classList.toggle('border-b-2', active);
+      t.classList.toggle('border-blue-500', active);
+      t.classList.toggle('font-semibold', active);
+      t.classList.toggle('text-slate-400', !active);
+      t.classList.toggle('font-medium', !active);
+    });
+    showAuthForm(tab.dataset.authTab === 'login' ? loginForm : registerForm);
+  });
+});
+
+document.getElementById('forgot-password-link').addEventListener('click', () => {
+  showAuthForm(forgotPasswordForm, { showTabs: false });
+});
+
+document.getElementById('back-to-login-link').addEventListener('click', () => {
+  document.querySelector('[data-auth-tab="login"]').click();
+});
+
+document.querySelectorAll('.toggle-password').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = document.getElementById(btn.dataset.toggleFor);
+    input.type = input.type === 'password' ? 'text' : 'password';
+  });
+});
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('login-status');
+  status.textContent = '';
+  status.className = 'text-xs text-center min-h-[1em]';
+  const btn = document.getElementById('login-btn');
+  setButtonLoading(btn, true, 'Signing in…');
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('loginEmail').value,
+        password: document.getElementById('loginPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = extractErrorMessages(data);
+      status.classList.add('text-rose-400');
+      return;
+    }
+    currentUser = data;
+    isAuthed = true;
+    showToast('Welcome back!', 'success');
+    navigate('dashboard');
+  } catch (err) {
+    status.textContent = 'Network error — is the server running?';
+    status.classList.add('text-rose-400');
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+
+registerForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('register-status');
+  status.textContent = '';
+  status.className = 'text-xs text-center min-h-[1em]';
+  const btn = document.getElementById('register-btn');
+  setButtonLoading(btn, true, 'Creating account…');
+  try {
+    const res = await fetch('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('registerEmail').value,
+        password: document.getElementById('registerPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = extractErrorMessages(data);
+      status.classList.add('text-rose-400');
+      return;
+    }
+    status.textContent = 'Account created — log in now.';
+    status.classList.add('text-emerald-400');
+    document.getElementById('loginEmail').value = document.getElementById('registerEmail').value;
+    document.querySelector('[data-auth-tab="login"]').click();
+  } catch (err) {
+    status.textContent = 'Network error — is the server running?';
+    status.classList.add('text-rose-400');
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+
+forgotPasswordForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('forgot-password-status');
+  status.textContent = '';
+  status.className = 'text-xs text-center min-h-[1em]';
+  const btn = document.getElementById('forgot-password-btn');
+  setButtonLoading(btn, true, 'Sending…');
+  try {
+    const res = await fetch('/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.getElementById('forgotEmail').value }),
+    });
+    const data = await res.json();
+    status.textContent = res.ok ? data.message || 'If that email is registered, a reset link has been sent.' : extractErrorMessages(data);
+    status.classList.add(res.ok ? 'text-emerald-400' : 'text-rose-400');
+  } catch (err) {
+    status.textContent = 'Network error — is the server running?';
+    status.classList.add('text-rose-400');
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+
+resetPasswordForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const status = document.getElementById('reset-password-status');
+  status.textContent = '';
+  status.className = 'text-xs text-center min-h-[1em]';
+  const btn = document.getElementById('reset-password-btn');
+  setButtonLoading(btn, true, 'Saving…');
+  try {
+    const res = await fetch('/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: resetPasswordForm.dataset.token,
+        password: document.getElementById('newPassword').value,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = extractErrorMessages(data);
+      status.classList.add('text-rose-400');
+      return;
+    }
+    status.textContent = 'Password updated — log in with your new password.';
+    status.classList.add('text-emerald-400');
+    window.history.replaceState({}, '', window.location.pathname);
+    setTimeout(() => document.querySelector('[data-auth-tab="login"]').click(), 1500);
+  } catch (err) {
+    status.textContent = 'Network error — is the server running?';
+    status.classList.add('text-rose-400');
+  } finally {
+    setButtonLoading(btn, false);
+  }
+});
+
+function checkForResetToken() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('reset_token');
+  if (!token) return false;
+  resetPasswordForm.dataset.token = token;
+  showAuthForm(resetPasswordForm, { showTabs: false });
+  isAuthed = false;
+  navigate('auth');
+  return true;
+}
+
+// ==========================================
+// Campaign composer (recipients +/-, validation, dispatch)
+// ==========================================
+
+const campaignForm = document.getElementById('campaign-form');
+const recipientList = document.getElementById('recipient-list');
 
 function makeRecipientRow() {
   const row = document.createElement('div');
-  row.className = 'recipient-row';
+  row.className = 'recipient-row grid grid-cols-[1fr,38px,38px] gap-2';
   row.setAttribute('data-recipient-row', '');
   row.innerHTML = `
-    <input type="email" class="recipient-input" placeholder="recipient@example.com" />
-    <button type="button" class="icon-btn remove-btn" data-remove title="Remove recipient">&minus;</button>
-    <button type="button" class="icon-btn add-btn" data-add title="Add recipient">&plus;</button>
+    <input type="email" class="recipient-input input-dark" placeholder="recipient@example.com" />
+    <button type="button" class="icon-btn remove-btn w-[38px] h-[38px] rounded-lg border border-slate-700 text-rose-400 hover:border-rose-400 flex items-center justify-center" data-remove title="Remove recipient">&minus;</button>
+    <button type="button" class="icon-btn add-btn w-[38px] h-[38px] rounded-lg border border-slate-700 text-blue-400 hover:border-blue-400 flex items-center justify-center" data-add title="Add recipient">&plus;</button>
   `;
   return row;
 }
@@ -58,19 +324,17 @@ function makeRecipientRow() {
 function refreshRecipientButtons() {
   const rows = recipientList.querySelectorAll('[data-recipient-row]');
   rows.forEach((row, idx) => {
-    const addBtn = row.querySelector('[data-add]');
-    const removeBtn = row.querySelector('[data-remove]');
-    addBtn.style.visibility = idx === rows.length - 1 ? 'visible' : 'hidden';
-    removeBtn.disabled = rows.length === 1;
+    row.querySelector('[data-add]').style.visibility = idx === rows.length - 1 ? 'visible' : 'hidden';
+    row.querySelector('[data-remove]').disabled = rows.length === 1;
   });
 }
 
 recipientList.addEventListener('click', (e) => {
-  if (e.target.matches('[data-add]')) {
+  if (e.target.closest('[data-add]')) {
     const row = e.target.closest('[data-recipient-row]');
     row.after(makeRecipientRow());
     refreshRecipientButtons();
-  } else if (e.target.matches('[data-remove]')) {
+  } else if (e.target.closest('[data-remove]')) {
     const rows = recipientList.querySelectorAll('[data-recipient-row]');
     if (rows.length === 1) return;
     e.target.closest('[data-recipient-row]').remove();
@@ -84,29 +348,26 @@ function collectRecipientEmails() {
   return Array.from(recipientList.querySelectorAll('.recipient-input')).map((i) => i.value.trim());
 }
 
-// --------------------------------- Validation --------------------------------
-
-function clearErrors() {
-  form.querySelectorAll('.error').forEach((el) => (el.textContent = ''));
-  form.querySelectorAll('.invalid').forEach((el) => el.classList.remove('invalid'));
+function clearFormErrors() {
+  campaignForm.querySelectorAll('.error').forEach((el) => (el.textContent = ''));
+  campaignForm.querySelectorAll('.invalid').forEach((el) => el.classList.remove('invalid'));
 }
 
-function setFieldError(fieldName, message) {
-  const el = form.querySelector(`[data-error-for="${fieldName}"]`);
+function setFieldError(fieldId, message) {
+  const el = campaignForm.querySelector(`[data-error-for="${fieldId}"]`);
   if (el) el.textContent = message;
-  const input = form.querySelector(`#${fieldName}`);
+  const input = document.getElementById(fieldId);
   if (input) input.classList.add('invalid');
 }
 
-function validateClientSide(payload) {
-  clearErrors();
+function validateCampaignForm(payload) {
+  clearFormErrors();
   let valid = true;
 
   if (!payload.campaignName.trim()) {
     setFieldError('campaignName', 'Campaign name is required');
     valid = false;
   }
-
   if (!payload.fromEmail.trim()) {
     setFieldError('fromEmail', 'From Email is required');
     valid = false;
@@ -114,14 +375,13 @@ function validateClientSide(payload) {
     setFieldError('fromEmail', 'Enter a valid email address');
     valid = false;
   }
-
   if (!payload.body.trim()) {
     setFieldError('body', 'Email body is required');
     valid = false;
   }
 
   const toEmails = payload.toEmails.filter(Boolean);
-  const toEmailsErrorEl = form.querySelector('[data-error-for="toEmails"]');
+  const toEmailsErrorEl = campaignForm.querySelector('[data-error-for="toEmails"]');
   if (toEmails.length === 0) {
     if (toEmailsErrorEl) toEmailsErrorEl.textContent = 'At least one To Email is required';
     valid = false;
@@ -140,154 +400,27 @@ function validateClientSide(payload) {
   return valid;
 }
 
-// ------------------------------ Rendering helpers ------------------------------
-
-function extractErrorMessages(data) {
-  if (Array.isArray(data.errors)) return data.errors.join(' · ');
-  if (Array.isArray(data.detail)) return data.detail.map((d) => d.msg || JSON.stringify(d)).join(' · ');
-  if (typeof data.detail === 'string') return data.detail;
-  return 'Something went wrong';
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function yesNo(value) {
-  if (value === true) return '<span class="badge badge-yes">Yes</span>';
-  if (value === false) return '<span class="badge badge-no">No</span>';
-  return '<span class="badge badge-partial">Partial</span>';
-}
-
-function countBy(recipients, key) {
-  return recipients.filter((r) => r[key]).length;
-}
-
-function renderCampaigns(campaigns) {
-  if (!campaigns.length) {
-    trackerBody.innerHTML = '<tr class="empty-row"><td colspan="8">No campaigns yet. Create one above to see it here.</td></tr>';
-    return;
-  }
-
-  trackerBody.innerHTML = campaigns
-    .map((c) => {
-      const created = new Date(c.createdAt).toLocaleString();
-      const delivered = countBy(c.recipients, 'delivered');
-      const opened = countBy(c.recipients, 'opened');
-      const bounced = countBy(c.recipients, 'bounced');
-      return `
-        <tr data-id="${c.id}" class="campaign-row">
-          <td><strong>${escapeHtml(c.campaignName)}</strong></td>
-          <td>${escapeHtml(c.fromEmail)}</td>
-          <td>${c.recipients.length}</td>
-          <td>${delivered}/${c.recipients.length}</td>
-          <td>${opened}/${c.recipients.length}</td>
-          <td>${bounced}/${c.recipients.length}</td>
-          <td>${escapeHtml(created)}</td>
-          <td><button class="delete-btn" data-id="${c.id}">Remove</button></td>
-        </tr>
-      `;
-    })
-    .join('');
-}
-
-async function loadCampaigns() {
-  try {
-    const res = await fetch('/api/campaigns');
-    const data = await res.json();
-    renderCampaigns(Array.isArray(data) ? data : data.campaigns || []);
-  } catch (err) {
-    trackerBody.innerHTML = '<tr class="empty-row"><td colspan="8">Failed to load campaigns.</td></tr>';
-  }
-}
-
-// --------------------------------- Detail modal ---------------------------------
-
-function openModal(campaign) {
-  modalTitle.textContent = campaign.campaignName;
-  modalSubtitle.textContent = `From: ${campaign.fromEmail} · ${campaign.recipients.length} recipient(s)`;
-
-  detailBody.innerHTML = campaign.recipients
-    .map(
-      (r) => `
-      <tr>
-        <td>${escapeHtml(r.email)}</td>
-        <td>${yesNo(r.delivered)}</td>
-        <td>${yesNo(r.opened)}</td>
-        <td>${yesNo(r.notOpened)}</td>
-        <td>${yesNo(r.linkClicked)}</td>
-        <td>${yesNo(r.bounced)}${r.bounceType ? ` <span class="bounce-type">(${escapeHtml(r.bounceType)})</span>` : ''}</td>
-        <td>${yesNo(r.unsubscribed)}</td>
-        <td>${yesNo(r.spamReported)}</td>
-      </tr>
-    `
-    )
-    .join('');
-
-  modal.hidden = false;
-}
-
-function closeModal() {
-  modal.hidden = true;
-}
-
-modalClose.addEventListener('click', closeModal);
-modal.addEventListener('click', (e) => {
-  if (e.target === modal) closeModal();
-});
-
-trackerBody.addEventListener('click', async (e) => {
-  if (e.target.classList.contains('delete-btn')) {
-    const id = e.target.getAttribute('data-id');
-    e.target.disabled = true;
-    try {
-      await fetch(`/api/campaigns/${id}`, { method: 'DELETE' });
-      await loadCampaigns();
-    } catch (err) {
-      e.target.disabled = false;
-    }
-    return;
-  }
-
-  const row = e.target.closest('.campaign-row');
-  if (!row) return;
-  const id = row.getAttribute('data-id');
-  try {
-    const res = await fetch(`/api/campaigns/${id}`);
-    const data = await res.json();
-    if (res.ok) openModal(data.campaign || data);
-  } catch (err) {
-    /* ignore */
-  }
-});
-
-// ----------------------------------- Form submit -----------------------------------
-
-form.addEventListener('submit', async (e) => {
+campaignForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const formStatus = document.getElementById('form-status');
   formStatus.textContent = '';
-  formStatus.className = 'form-status';
+  formStatus.className = 'text-xs';
 
   const payload = {
-    campaignName: form.campaignName.value,
-    fromEmail: form.fromEmail.value,
+    campaignName: document.getElementById('campaignName').value,
+    fromEmail: document.getElementById('fromEmail').value,
     toEmails: collectRecipientEmails(),
-    body: form.body.value,
+    body: document.getElementById('body').value,
   };
 
-  if (!validateClientSide(payload)) {
+  if (!validateCampaignForm(payload)) {
     formStatus.textContent = 'Please fix the errors above.';
-    formStatus.classList.add('error');
+    formStatus.classList.add('text-rose-400');
     return;
   }
 
-  submitBtn.disabled = true;
-  submitBtn.textContent = 'Creating…';
+  const btn = document.getElementById('submit-btn');
+  setButtonLoading(btn, true, 'Dispatching…');
 
   try {
     const res = await fetch('/api/campaigns', {
@@ -299,255 +432,261 @@ form.addEventListener('submit', async (e) => {
 
     if (!res.ok) {
       formStatus.textContent = extractErrorMessages(data);
-      formStatus.classList.add('error');
+      formStatus.classList.add('text-rose-400');
       return;
     }
 
-    formStatus.textContent = 'Campaign created successfully.';
-    formStatus.classList.add('success');
-    form.reset();
-    clearErrors();
+    showToast(`Campaign "${data.campaignName}" dispatched successfully!`, 'success');
+    campaignForm.reset();
+    clearFormErrors();
     recipientList.innerHTML = '';
     recipientList.appendChild(makeRecipientRow());
     refreshRecipientButtons();
-    await loadCampaigns();
+    navigate('campaigns');
   } catch (err) {
     formStatus.textContent = 'Network error — is the server running?';
-    formStatus.classList.add('error');
+    formStatus.classList.add('text-rose-400');
   } finally {
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Create Campaign';
+    setButtonLoading(btn, false);
   }
 });
 
-// ----------------------------------- Auth gate -----------------------------------
+// ==========================================
+// Dashboard (aggregate stats + activity feed)
+// ==========================================
 
-const authScreen = document.getElementById('auth-screen');
-const appContent = document.getElementById('app-content');
-const currentUserEmailEl = document.getElementById('current-user-email');
-const logoutBtn = document.getElementById('logout-btn');
-const authTabsBar = document.getElementById('auth-tabs');
-
-const loginForm = document.getElementById('login-form');
-const registerForm = document.getElementById('register-form');
-const forgotPasswordForm = document.getElementById('forgot-password-form');
-const resetPasswordForm = document.getElementById('reset-password-form');
-const loginStatus = document.getElementById('login-status');
-const registerStatus = document.getElementById('register-status');
-const forgotPasswordStatus = document.getElementById('forgot-password-status');
-const resetPasswordStatus = document.getElementById('reset-password-status');
-const authTabs = document.querySelectorAll('[data-auth-tab]');
-const allAuthForms = [loginForm, registerForm, forgotPasswordForm, resetPasswordForm];
-
-function showAuthForm(formToShow, { showTabs = true } = {}) {
-  allAuthForms.forEach((f) => (f.hidden = f !== formToShow));
-  authTabsBar.hidden = !showTabs;
-}
-
-authTabs.forEach((tab) => {
-  tab.addEventListener('click', () => {
-    authTabs.forEach((t) => t.classList.remove('active'));
-    tab.classList.add('active');
-    showAuthForm(tab.dataset.authTab === 'login' ? loginForm : registerForm);
-  });
-});
-
-document.getElementById('forgot-password-link').addEventListener('click', () => {
-  showAuthForm(forgotPasswordForm, { showTabs: false });
-});
-
-document.getElementById('back-to-login-link').addEventListener('click', () => {
-  authTabs.forEach((t) => t.classList.toggle('active', t.dataset.authTab === 'login'));
-  showAuthForm(loginForm);
-});
-
-// Toggle password visibility (eye buttons next to each password field)
-document.querySelectorAll('.toggle-password').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const input = document.getElementById(btn.dataset.toggleFor);
-    input.type = input.type === 'password' ? 'text' : 'password';
-  });
-});
-
-function setButtonLoading(button, isLoading) {
-  button.disabled = isLoading;
-  button.classList.toggle('loading', isLoading);
-}
-
-function showApp(user) {
-  authScreen.hidden = true;
-  appContent.hidden = false;
-  currentUserEmailEl.textContent = user.email;
-  loadCampaigns();
-  loadEmailAccounts();
-}
-
-function showAuthScreen() {
-  authScreen.hidden = false;
-  appContent.hidden = true;
-}
-
-async function checkAuth() {
+async function loadDashboardData() {
   try {
-    const res = await fetch('/auth/me');
-    if (res.ok) {
-      showApp(await res.json());
+    const res = await fetch('/api/campaigns');
+    const campaigns = res.ok ? await res.json() : [];
+    const allRecipients = campaigns.flatMap((c) => c.recipients.map((r) => ({ ...r, campaignName: c.campaignName })));
+
+    const counts = {
+      delivered: allRecipients.filter((r) => r.delivered).length,
+      opened: allRecipients.filter((r) => r.opened).length,
+      notOpened: allRecipients.filter((r) => r.notOpened).length,
+      clicked: allRecipients.filter((r) => r.linkClicked).length,
+      bounced: allRecipients.filter((r) => r.bounced).length,
+      unsubscribed: allRecipients.filter((r) => r.unsubscribed).length,
+      spam: allRecipients.filter((r) => r.spamReported === true).length,
+    };
+
+    document.getElementById('stat-delivered').textContent = counts.delivered;
+    document.getElementById('stat-opened').textContent = counts.opened;
+    document.getElementById('stat-not-opened').textContent = counts.notOpened;
+    document.getElementById('stat-clicked').textContent = counts.clicked;
+    document.getElementById('stat-bounced').textContent = counts.bounced;
+    document.getElementById('stat-unsubscribed').textContent = counts.unsubscribed;
+    document.getElementById('stat-spam').textContent = counts.spam;
+
+    const openRate = counts.delivered ? Math.round((counts.opened / counts.delivered) * 100) : 0;
+    const clickRate = counts.delivered ? Math.round((counts.clicked / counts.delivered) * 100) : 0;
+    document.getElementById('stat-open-rate').textContent = `${openRate}% rate`;
+    document.getElementById('stat-click-rate').textContent = `${clickRate}% rate`;
+
+    const events = [];
+    allRecipients.forEach((r) => {
+      if (r.openedAt) events.push({ type: 'open', email: r.email, campaignName: r.campaignName, at: r.openedAt });
+      if (r.linkClickedAt) events.push({ type: 'click', email: r.email, campaignName: r.campaignName, at: r.linkClickedAt });
+      if (r.bouncedAt) events.push({ type: 'bounce', email: r.email, campaignName: r.campaignName, at: r.bouncedAt });
+      if (r.unsubscribedAt) events.push({ type: 'unsubscribe', email: r.email, campaignName: r.campaignName, at: r.unsubscribedAt });
+    });
+    events.sort((a, b) => new Date(b.at) - new Date(a.at));
+
+    const feed = document.getElementById('activity-feed');
+    if (!events.length) {
+      feed.innerHTML = '<div class="py-8 text-center text-slate-500">No telemetry recorded yet. Send a campaign to begin tracking.</div>';
     } else {
-      showAuthScreen();
+      const ICONS = { open: 'eye', click: 'mouse-pointer-click', bounce: 'alert-octagon', unsubscribe: 'user-x' };
+      const COLORS = {
+        open: 'bg-emerald-500/10 text-emerald-400',
+        click: 'bg-purple-500/10 text-purple-400',
+        bounce: 'bg-rose-500/10 text-rose-400',
+        unsubscribe: 'bg-cyan-500/10 text-cyan-400',
+      };
+      const VERB = { open: 'opened', click: 'clicked a link in', bounce: 'bounced on', unsubscribe: 'unsubscribed from' };
+      feed.innerHTML = events
+        .slice(0, 20)
+        .map(
+          (ev) => `
+        <div class="py-3 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg ${COLORS[ev.type]} flex items-center justify-center">
+              <i data-lucide="${ICONS[ev.type]}" class="w-4 h-4"></i>
+            </div>
+            <div>
+              <span class="font-medium text-slate-200">${escapeHtml(ev.email)}</span>
+              <span class="text-xs text-slate-400 ml-2">${VERB[ev.type]} <strong>${escapeHtml(ev.campaignName)}</strong></span>
+            </div>
+          </div>
+          <div class="text-xs text-slate-500">${new Date(ev.at).toLocaleString()}</div>
+        </div>
+      `
+        )
+        .join('');
     }
-  } catch (err) {
-    showAuthScreen();
-  }
-}
-
-loginForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  loginStatus.textContent = '';
-  loginStatus.className = 'form-status';
-  const btn = document.getElementById('login-btn');
-  setButtonLoading(btn, true);
-  try {
-    const res = await fetch('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: document.getElementById('loginEmail').value,
-        password: document.getElementById('loginPassword').value,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      loginStatus.textContent = extractErrorMessages(data);
-      loginStatus.classList.add('error');
-      return;
-    }
-    showApp(data);
-  } catch (err) {
-    loginStatus.textContent = 'Network error — is the server running?';
-    loginStatus.classList.add('error');
-  } finally {
-    setButtonLoading(btn, false);
-  }
-});
-
-registerForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  registerStatus.textContent = '';
-  registerStatus.className = 'form-status';
-  const btn = document.getElementById('register-btn');
-  setButtonLoading(btn, true);
-  try {
-    const res = await fetch('/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: document.getElementById('registerEmail').value,
-        password: document.getElementById('registerPassword').value,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      registerStatus.textContent = extractErrorMessages(data);
-      registerStatus.classList.add('error');
-      return;
-    }
-    registerStatus.textContent = 'Account created — log in now.';
-    registerStatus.classList.add('success');
-    document.getElementById('loginEmail').value = document.getElementById('registerEmail').value;
-    document.querySelector('[data-auth-tab="login"]').click();
-  } catch (err) {
-    registerStatus.textContent = 'Network error — is the server running?';
-    registerStatus.classList.add('error');
-  } finally {
-    setButtonLoading(btn, false);
-  }
-});
-
-forgotPasswordForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  forgotPasswordStatus.textContent = '';
-  forgotPasswordStatus.className = 'form-status';
-  const btn = document.getElementById('forgot-password-btn');
-  setButtonLoading(btn, true);
-  try {
-    const res = await fetch('/auth/forgot-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: document.getElementById('forgotEmail').value }),
-    });
-    const data = await res.json();
-    forgotPasswordStatus.textContent = res.ok
-      ? data.message || 'If that email is registered, a reset link has been sent.'
-      : extractErrorMessages(data);
-    forgotPasswordStatus.classList.add(res.ok ? 'success' : 'error');
-  } catch (err) {
-    forgotPasswordStatus.textContent = 'Network error — is the server running?';
-    forgotPasswordStatus.classList.add('error');
-  } finally {
-    setButtonLoading(btn, false);
-  }
-});
-
-resetPasswordForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  resetPasswordStatus.textContent = '';
-  resetPasswordStatus.className = 'form-status';
-  const btn = document.getElementById('reset-password-btn');
-  setButtonLoading(btn, true);
-  try {
-    const res = await fetch('/auth/reset-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: resetPasswordForm.dataset.token,
-        password: document.getElementById('newPassword').value,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      resetPasswordStatus.textContent = extractErrorMessages(data);
-      resetPasswordStatus.classList.add('error');
-      return;
-    }
-    resetPasswordStatus.textContent = 'Password updated — log in with your new password.';
-    resetPasswordStatus.classList.add('success');
-    window.history.replaceState({}, '', window.location.pathname);
-    setTimeout(() => {
-      authTabs.forEach((t) => t.classList.toggle('active', t.dataset.authTab === 'login'));
-      showAuthForm(loginForm);
-    }, 1500);
-  } catch (err) {
-    resetPasswordStatus.textContent = 'Network error — is the server running?';
-    resetPasswordStatus.classList.add('error');
-  } finally {
-    setButtonLoading(btn, false);
-  }
-});
-
-logoutBtn.addEventListener('click', async () => {
-  try {
-    await fetch('/auth/logout', { method: 'POST' });
+    refreshIcons();
   } catch (err) {
     /* ignore */
   }
-  showAuthScreen();
-});
-
-// If the page was opened from a password-reset email link (?reset_token=...),
-// show that form immediately and skip the normal "already logged in?" check
-// — otherwise a still-valid session elsewhere would jump straight past the
-// reset form into the app.
-function checkForResetToken() {
-  const params = new URLSearchParams(window.location.search);
-  const token = params.get('reset_token');
-  if (!token) return false;
-  resetPasswordForm.dataset.token = token;
-  showAuthForm(resetPasswordForm, { showTabs: false });
-  showAuthScreen();
-  return true;
 }
 
-// ----------------------------------- Email accounts -----------------------------------
+// ==========================================
+// Campaigns list + detail modal
+// ==========================================
+
+const detailModal = document.getElementById('detail-modal');
+
+function yesNo(value) {
+  if (value === true) return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Yes</span>';
+  if (value === false) return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-700/50 text-slate-400">No</span>';
+  return '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/10 text-amber-400 border border-amber-500/20">Partial</span>';
+}
+
+function statusBadge(status) {
+  const map = {
+    Sent: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20',
+    Sending: 'bg-amber-500/10 text-amber-400 border border-amber-500/20',
+    Scheduled: 'bg-slate-700/50 text-slate-300 border border-slate-600/40',
+  };
+  return `<span class="text-[11px] px-2 py-0.5 rounded-full uppercase font-bold ${map[status] || map.Scheduled}">${escapeHtml(status)}</span>`;
+}
+
+async function loadCampaignsData() {
+  const container = document.getElementById('campaigns-list');
+  try {
+    const res = await fetch('/api/campaigns');
+    if (!res.ok) return;
+    const campaigns = await res.json();
+
+    if (!campaigns.length) {
+      container.innerHTML = '<div class="glass-card rounded-2xl p-8 text-center text-slate-500">No campaigns created yet. Click "New Campaign" to create one.</div>';
+      return;
+    }
+
+    container.innerHTML = campaigns
+      .map((c) => {
+        const delivered = c.recipients.filter((r) => r.delivered).length;
+        return `
+        <div class="glass-card rounded-2xl p-5 hover:border-slate-700 transition">
+          <div class="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-semibold text-white campaign-row cursor-pointer" data-id="${c.id}">${escapeHtml(c.campaignName)}</h3>
+                ${statusBadge(c.status)}
+              </div>
+              <p class="text-xs text-slate-400 mt-1">From: <span class="text-slate-200">${escapeHtml(c.fromEmail)}</span> &bull; ${delivered}/${c.recipients.length} delivered</p>
+            </div>
+            <div class="flex items-center gap-3 text-xs text-slate-400">
+              <div><strong class="text-white">${c.recipients.length}</strong> recipients</div>
+              <div>${new Date(c.createdAt).toLocaleDateString()}</div>
+              <button class="campaign-row px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-medium transition" data-id="${c.id}">Details</button>
+              <button class="delete-btn text-rose-400 hover:text-rose-300 px-2" data-id="${c.id}">Delete</button>
+            </div>
+          </div>
+        </div>
+      `;
+      })
+      .join('');
+    refreshIcons();
+  } catch (err) {
+    container.innerHTML = '<div class="glass-card rounded-2xl p-8 text-center text-slate-500">Failed to load campaigns.</div>';
+  }
+}
+
+document.getElementById('campaigns-list').addEventListener('click', async (e) => {
+  const deleteBtn = e.target.closest('.delete-btn');
+  if (deleteBtn) {
+    const id = deleteBtn.getAttribute('data-id');
+    deleteBtn.disabled = true;
+    try {
+      await fetch(`/api/campaigns/${id}`, { method: 'DELETE' });
+      showToast('Campaign deleted', 'info');
+      await loadCampaignsData();
+    } catch (err) {
+      deleteBtn.disabled = false;
+    }
+    return;
+  }
+
+  const row = e.target.closest('.campaign-row');
+  if (!row) return;
+  await openDetailModal(row.getAttribute('data-id'));
+});
+
+async function openDetailModal(id) {
+  try {
+    const res = await fetch(`/api/campaigns/${id}`);
+    if (!res.ok) throw new Error('Failed to load campaign');
+    const c = await res.json();
+
+    document.getElementById('modal-title').textContent = c.campaignName;
+    document.getElementById('modal-subtitle').innerHTML = `From: <strong class="text-slate-200">${escapeHtml(c.fromEmail)}</strong> &bull; ${c.recipients.length} recipient(s) &bull; Created: ${new Date(c.createdAt).toLocaleString()}`;
+
+    const counts = {
+      delivered: c.recipients.filter((r) => r.delivered).length,
+      opened: c.recipients.filter((r) => r.opened).length,
+      notOpened: c.recipients.filter((r) => r.notOpened).length,
+      clicked: c.recipients.filter((r) => r.linkClicked).length,
+      bounced: c.recipients.filter((r) => r.bounced).length,
+      unsubscribed: c.recipients.filter((r) => r.unsubscribed).length,
+      spam: c.recipients.filter((r) => r.spamReported === true).length,
+    };
+    const statCards = [
+      ['Delivered', counts.delivered, 'text-blue-400'],
+      ['Opened', counts.opened, 'text-emerald-400'],
+      ['Not Opened', counts.notOpened, 'text-amber-400'],
+      ['Clicked', counts.clicked, 'text-purple-400'],
+      ['Bounced', counts.bounced, 'text-rose-400'],
+      ['Unsub', counts.unsubscribed, 'text-cyan-400'],
+      ['Spam', counts.spam, 'text-yellow-400'],
+    ];
+    document.getElementById('modal-stats').innerHTML = statCards
+      .map(
+        ([label, value, color]) => `
+        <div class="p-3 bg-slate-900/90 border border-slate-800 rounded-xl">
+          <div class="text-[10px] ${color} font-semibold uppercase">${label}</div>
+          <div class="text-xl font-bold text-white mt-1">${value}</div>
+        </div>`
+      )
+      .join('');
+
+    document.getElementById('detail-body').innerHTML = c.recipients
+      .map(
+        (r) => `
+        <tr class="hover:bg-slate-800/40 transition">
+          <td class="py-2.5 px-4 font-medium text-slate-200">${escapeHtml(r.email)}</td>
+          <td class="py-2.5 px-3 text-center">${yesNo(r.delivered)}</td>
+          <td class="py-2.5 px-3 text-center">${yesNo(r.opened)}</td>
+          <td class="py-2.5 px-3 text-center">${yesNo(r.notOpened)}</td>
+          <td class="py-2.5 px-3 text-center">${yesNo(r.linkClicked)}</td>
+          <td class="py-2.5 px-3 text-center">${yesNo(r.bounced)}${r.bounceType ? `<div class="text-[10px] text-slate-500 mt-0.5">${escapeHtml(r.bounceType)}</div>` : ''}</td>
+          <td class="py-2.5 px-3 text-center">${yesNo(r.unsubscribed)}</td>
+          <td class="py-2.5 px-4 text-center">${yesNo(r.spamReported)}</td>
+        </tr>`
+      )
+      .join('');
+
+    detailModal.classList.remove('hidden');
+    refreshIcons();
+  } catch (err) {
+    showToast('Failed to load campaign details', 'error');
+  }
+}
+
+function closeDetailModal() {
+  detailModal.classList.add('hidden');
+}
+
+document.getElementById('modal-close').addEventListener('click', closeDetailModal);
+document.getElementById('modal-close-2').addEventListener('click', closeDetailModal);
+detailModal.addEventListener('click', (e) => {
+  if (e.target === detailModal) closeDetailModal();
+});
+
+// ==========================================
+// Connected email accounts (Mailboxes)
+// ==========================================
 
 const connectForm = document.getElementById('connect-form');
 const emailAccountsList = document.getElementById('email-accounts-list');
@@ -559,16 +698,22 @@ async function loadEmailAccounts() {
     if (!res.ok) return;
     const accounts = await res.json();
     if (!accounts.length) {
-      emailAccountsList.innerHTML = '<li class="email-account-row" style="justify-content:center;color:var(--muted)">No email accounts connected yet.</li>';
+      emailAccountsList.innerHTML = '<li class="py-4 text-center text-slate-500 text-sm">No connected mailboxes found.</li>';
       return;
     }
     emailAccountsList.innerHTML = accounts
       .map(
         (a) => `
-        <li class="email-account-row" data-id="${a.id}">
-          <span>${escapeHtml(a.email_address)}<span class="provider-tag">${escapeHtml(a.provider)} · ${a.is_verified ? 'Verified' : 'Pending'}</span></span>
-          <button type="button" class="delete-btn" data-disconnect="${a.id}">Disconnect</button>
-        </li>`
+      <li class="py-3 flex items-center justify-between" data-id="${a.id}">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold text-[10px] uppercase">${escapeHtml(a.provider.slice(0, 2))}</div>
+          <div>
+            <span class="font-medium text-slate-200 text-sm">${escapeHtml(a.email_address)}</span>
+            <span class="text-xs text-slate-400 ml-2">${escapeHtml(a.provider)} &middot; ${a.is_verified ? 'Verified' : 'Pending'}</span>
+          </div>
+        </div>
+        <button class="text-xs text-rose-400 hover:text-rose-300" data-disconnect="${a.id}">Disconnect</button>
+      </li>`
       )
       .join('');
   } catch (err) {
@@ -579,7 +724,7 @@ async function loadEmailAccounts() {
 connectForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   emailAccountsMessage.textContent = '';
-  emailAccountsMessage.className = 'form-status';
+  emailAccountsMessage.className = 'text-xs min-h-[1em]';
   const email = document.getElementById('connectEmail').value.trim();
   const provider = document.getElementById('connectProvider').value;
 
@@ -592,21 +737,19 @@ connectForm.addEventListener('submit', async (e) => {
     const data = await res.json();
     if (!res.ok) {
       emailAccountsMessage.textContent = extractErrorMessages(data);
-      emailAccountsMessage.classList.add('error');
+      emailAccountsMessage.classList.add('text-rose-400');
       return;
     }
     if (data.status === 'already_connected') {
       emailAccountsMessage.textContent = `${email} is already connected.`;
-      emailAccountsMessage.classList.add('success');
+      emailAccountsMessage.classList.add('text-emerald-400');
       await loadEmailAccounts();
       return;
     }
-    if (data.authorization_url) {
-      window.location.href = data.authorization_url;
-    }
+    if (data.authorization_url) window.location.href = data.authorization_url;
   } catch (err) {
     emailAccountsMessage.textContent = 'Network error — is the server running?';
-    emailAccountsMessage.classList.add('error');
+    emailAccountsMessage.classList.add('text-rose-400');
   }
 });
 
@@ -616,32 +759,35 @@ emailAccountsList.addEventListener('click', async (e) => {
   e.target.disabled = true;
   try {
     await fetch(`/email-accounts/${id}`, { method: 'DELETE' });
+    showToast('Mailbox disconnected', 'info');
     await loadEmailAccounts();
   } catch (err) {
     e.target.disabled = false;
   }
 });
 
-// Surface the OAuth callback's redirect result (?connected=... / ?oauth_error=...)
 (function showOAuthRedirectResult() {
   const params = new URLSearchParams(window.location.search);
   if (params.has('connected')) {
-    emailAccountsMessage.textContent = `Connected ${params.get('connected')} successfully.`;
-    emailAccountsMessage.classList.add('success');
+    showToast(`Connected ${params.get('connected')} successfully.`, 'success');
   } else if (params.has('oauth_error')) {
     const err = params.get('oauth_error');
     const messages = {
       identity_mismatch: `You signed in as a different account than the one you tried to connect (requested ${params.get('requested')}, authenticated as ${params.get('authenticated')}).`,
       already_linked_elsewhere: 'That email is already connected to a different account.',
     };
-    emailAccountsMessage.textContent = messages[err] || `Connection failed: ${err}`;
-    emailAccountsMessage.classList.add('error');
+    showToast(messages[err] || `Connection failed: ${err}`, 'error');
   }
   if (params.has('connected') || params.has('oauth_error')) {
     window.history.replaceState({}, '', window.location.pathname);
   }
 })();
 
+// ==========================================
+// Boot
+// ==========================================
+
+refreshIcons();
 if (!checkForResetToken()) {
   checkAuth();
 }

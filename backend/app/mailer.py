@@ -9,6 +9,9 @@ process/worker. That's the right fit for this app's volume (personal/small
 campaigns); if you ever need this to survive a worker restart mid-send or
 scale to a large recipient list, move this to a real task queue (Celery/RQ)
 instead — a BackgroundTask is fire-and-forget within one process.
+
+Sends over plain SMTP only. Point SMTP_HOST/PORT/USER/PASS (in .env) at
+your own mail server for unrestricted sending — see SETUP.md.
 """
 
 import html
@@ -21,7 +24,6 @@ from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
 
-import httpx
 from dotenv import load_dotenv
 
 from . import models
@@ -29,14 +31,6 @@ from .db import SessionLocal
 from .models import now_utc
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
-# Resend (HTTPS API) is preferred when configured — it sidesteps outbound
-# SMTP restrictions some hosts impose (Render blocks it outright; Railway is
-# unreliable for it too). Falls back to raw SMTP if RESEND_API_KEY isn't set,
-# so local dev / a host that does allow SMTP still works unchanged.
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
-RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev")
-RESEND_API_URL = "https://api.resend.com/emails"
 
 SMTP_HOST = os.environ.get("SMTP_HOST")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -48,8 +42,6 @@ URL_RE = re.compile(r"(https?://[^\s<]+)")
 
 
 def _is_sending_configured() -> bool:
-    if RESEND_API_KEY:
-        return True
     return bool(SMTP_HOST and SMTP_USER and SMTP_PASS)
 
 
@@ -88,48 +80,6 @@ def _mark_bounced(recipient: models.Recipient, bounce_type: str, reason: str) ->
 def _mark_delivered(recipient: models.Recipient) -> None:
     recipient.delivered = True
     recipient.delivered_at = now_utc()
-
-
-def _send_via_resend(campaign: models.Campaign, recipient: models.Recipient, html_body: str) -> None:
-    payload = {
-        "from": RESEND_FROM_EMAIL,
-        "to": [recipient.email],
-        "subject": campaign.campaign_name,
-        "html": html_body,
-        "text": campaign.body,
-        # The UI's From Email is what the user actually typed, but Resend
-        # requires the envelope sender to be on a domain you've verified
-        # with them — replies still go to the address the campaign
-        # claims to be from, via Reply-To, regardless of the envelope sender.
-        "reply_to": campaign.from_email,
-    }
-
-    try:
-        resp = httpx.post(
-            RESEND_API_URL,
-            json=payload,
-            headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-            timeout=30,
-        )
-    except httpx.HTTPError as exc:
-        _mark_bounced(recipient, "soft", f"Resend request failed: {exc}")
-        return
-
-    if resp.status_code >= 400:
-        try:
-            detail = resp.json().get("message", resp.text)
-        except ValueError:
-            detail = resp.text
-        # 4xx from Resend is almost always a config/validation problem
-        # (unverified domain, bad recipient, restricted sandbox sender)
-        # rather than the recipient's mailbox rejecting it — "soft" so a
-        # later successful send after fixing config isn't blocked by
-        # this recipient being permanently marked hard-bounced.
-        bounce_type = "hard" if resp.status_code == 422 else "soft"
-        _mark_bounced(recipient, bounce_type, f"Resend {resp.status_code}: {detail}")
-        return
-
-    _mark_delivered(recipient)
 
 
 def _send_via_smtp(campaign: models.Campaign, recipient: models.Recipient, html_body: str) -> None:
@@ -172,35 +122,14 @@ def _send_one(campaign: models.Campaign, recipient: models.Recipient, tracking_u
         tracking_urls["unsubscribeUrl"],
         tracking_urls["openPixelUrl"],
     )
-
-    if RESEND_API_KEY:
-        _send_via_resend(campaign, recipient, html_body)
-    else:
-        _send_via_smtp(campaign, recipient, html_body)
+    _send_via_smtp(campaign, recipient, html_body)
 
 
 def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
     """One-off transactional email (password reset, etc.) — separate from
     the campaign-sending path above since it isn't tracked and has no
-    recipient/token. Returns False (logs, doesn't raise) if sending isn't
+    recipient/token. Returns False (logs, doesn't raise) if SMTP isn't
     configured or the send fails, so callers can degrade gracefully."""
-    if RESEND_API_KEY:
-        try:
-            resp = httpx.post(
-                RESEND_API_URL,
-                json={
-                    "from": RESEND_FROM_EMAIL,
-                    "to": [to_email],
-                    "subject": subject,
-                    "text": body_text,
-                },
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                timeout=30,
-            )
-            return resp.status_code < 400
-        except httpx.HTTPError:
-            return False
-
     if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
         return False
 

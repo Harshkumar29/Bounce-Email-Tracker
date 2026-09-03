@@ -310,8 +310,8 @@
 
         <div class="glass-card rounded-2xl p-6 space-y-4 flex flex-col justify-between">
           <div>
-            <h2 class="text-base font-semibold text-white mb-2">OAuth Connections</h2>
-            <p class="text-xs text-slate-400 mb-4">Link a Google mailbox by identity (doesn't yet change how campaigns send — that still uses SMTP above or the connected SMTP credentials for this address).</p>
+            <h2 class="text-base font-semibold text-white mb-2">Connect Google (no password)</h2>
+            <p class="text-xs text-slate-400 mb-4">Sign in with Google once — campaigns from this address then send via the Gmail API, no App Password needed. Already connected before this feature shipped? Disconnect and reconnect to grant sending permission.</p>
             <form id="connect-form" class="space-y-3">
               <input type="email" id="connectEmail" required class="input-dark" placeholder="you@gmail.com" />
               <select id="connectProvider" class="input-dark">

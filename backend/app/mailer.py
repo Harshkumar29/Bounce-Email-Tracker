@@ -10,14 +10,20 @@ campaigns); if you ever need this to survive a worker restart mid-send or
 scale to a large recipient list, move this to a real task queue (Celery/RQ)
 instead — a BackgroundTask is fire-and-forget within one process.
 
-Sends over plain SMTP. Each user can connect their own mailbox's SMTP
-credentials (see routers/email_accounts_router.py's POST /email-accounts/smtp)
-— a campaign whose From Email matches one of that user's connected SMTP
-accounts sends through those credentials. Falls back to the global
-SMTP_HOST/PORT/USER/PASS in .env if no matching connected account exists,
-so a bare install with no per-user mailboxes still works — see SETUP.md.
+Three ways a campaign can actually get sent, tried in this order per
+campaign (matched by From Email against the owning user's connected
+accounts):
+  1. Gmail API, via a Google-connected account with the gmail.send scope
+     granted — no password ever touches this app. This is what makes
+     "every user connects their own mailbox" actually scale: App Passwords
+     don't (see SETUP.md's note on why this exists).
+  2. A per-user custom SMTP mailbox (routers/email_accounts_router.py's
+     POST /email-accounts/smtp).
+  3. The install-wide SMTP_HOST/PORT/USER/PASS default in .env, so a bare
+     install with no per-user mailboxes connected still works.
 """
 
+import base64
 import html
 import os
 import re
@@ -25,16 +31,18 @@ import smtplib
 import ssl
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 from urllib.parse import quote
 
+import httpx
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
 from . import models
-from .crypto import decrypt_secret
+from .crypto import decrypt_secret, encrypt_secret
 from .db import SessionLocal
 from .models import now_utc
 
@@ -45,6 +53,12 @@ DEFAULT_SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 DEFAULT_SMTP_USER = os.environ.get("SMTP_USER")
 DEFAULT_SMTP_PASS = os.environ.get("SMTP_PASS")
 DEFAULT_SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "1") != "0"
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 
 URL_RE = re.compile(r"(https?://[^\s<]+)")
 
@@ -58,28 +72,106 @@ class SmtpConfig:
     use_tls: bool
 
 
+@dataclass
+class GoogleSendConfig:
+    access_token: str
+
+
+SendConfig = Union[SmtpConfig, GoogleSendConfig]
+
+
 def _default_smtp_config() -> Optional[SmtpConfig]:
     if not (DEFAULT_SMTP_HOST and DEFAULT_SMTP_USER and DEFAULT_SMTP_PASS):
         return None
     return SmtpConfig(DEFAULT_SMTP_HOST, DEFAULT_SMTP_PORT, DEFAULT_SMTP_USER, DEFAULT_SMTP_PASS, DEFAULT_SMTP_USE_TLS)
 
 
-def resolve_smtp_config(db: Session, campaign: models.Campaign) -> Optional[SmtpConfig]:
-    """A user's own connected SMTP mailbox (matched by From Email) takes
-    priority over the install-wide default in .env."""
+def _refresh_google_access_token(db: Session, account: models.EmailAccount) -> Optional[str]:
+    """Returns a currently-valid access token, refreshing it first if it's
+    expired (or about to be) and a refresh token is on file. Persists the
+    refreshed token back to the DB so the next send doesn't re-refresh."""
+    cred = account.oauth_credential
+    if not cred:
+        return None
+
+    if cred.expires_at and cred.expires_at > datetime.now(timezone.utc) + timedelta(seconds=60):
+        return decrypt_secret(cred.access_token_encrypted)
+
+    refresh_token = decrypt_secret(cred.refresh_token_encrypted) if cred.refresh_token_encrypted else None
+    if not refresh_token or not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        # No refresh token on file (shouldn't happen — access_type=offline
+        # always requests one) or the app's own OAuth client isn't
+        # configured. Either way, fall through to whatever's next.
+        return decrypt_secret(cred.access_token_encrypted)
+
+    try:
+        resp = httpx.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError:
+        return None
+
+    access_token = data.get("access_token")
+    if not access_token:
+        return None
+
+    cred.access_token_encrypted = encrypt_secret(access_token)
+    if "expires_in" in data:
+        cred.expires_at = datetime.now(timezone.utc) + timedelta(seconds=data["expires_in"])
+    db.commit()
+    return access_token
+
+
+def resolve_send_config(db: Session, campaign: models.Campaign) -> Optional[SendConfig]:
+    """Priority per campaign, matched by From Email against the owning
+    user's connected accounts: Gmail API (no password ever needed) > the
+    user's own SMTP mailbox > the install-wide SMTP default."""
+    normalized_from = campaign.from_email.strip().lower()
+
     if campaign.user_id:
-        account = (
+        google_account = (
             db.query(models.EmailAccount)
             .filter(
                 models.EmailAccount.user_id == campaign.user_id,
-                models.EmailAccount.normalized_email == campaign.from_email.strip().lower(),
+                models.EmailAccount.normalized_email == normalized_from,
+                models.EmailAccount.provider == "google",
+                models.EmailAccount.is_active.is_(True),
+            )
+            .first()
+        )
+        if (
+            google_account
+            and google_account.oauth_credential
+            and google_account.oauth_credential.scopes
+            and GMAIL_SEND_SCOPE in google_account.oauth_credential.scopes
+        ):
+            token = _refresh_google_access_token(db, google_account)
+            if token:
+                return GoogleSendConfig(access_token=token)
+            # Token refresh failed (revoked/expired refresh token) — fall
+            # through to SMTP rather than silently not sending at all.
+
+        smtp_account = (
+            db.query(models.EmailAccount)
+            .filter(
+                models.EmailAccount.user_id == campaign.user_id,
+                models.EmailAccount.normalized_email == normalized_from,
                 models.EmailAccount.provider == "smtp",
                 models.EmailAccount.is_active.is_(True),
             )
             .first()
         )
-        if account and account.smtp_credential:
-            cred = account.smtp_credential
+        if smtp_account and smtp_account.smtp_credential:
+            cred = smtp_account.smtp_credential
             password = decrypt_secret(cred.smtp_password_encrypted)
             if password is not None:
                 return SmtpConfig(cred.smtp_host, cred.smtp_port, cred.smtp_username, password, cred.use_tls)
@@ -124,15 +216,20 @@ def _mark_delivered(recipient: models.Recipient) -> None:
     recipient.delivered_at = now_utc()
 
 
-def _send_via_smtp(
-    campaign: models.Campaign, recipient: models.Recipient, html_body: str, config: SmtpConfig
-) -> None:
+def _build_message(campaign: models.Campaign, recipient: models.Recipient, html_body: str) -> EmailMessage:
     msg = EmailMessage()
     msg["Subject"] = campaign.campaign_name
     msg["From"] = campaign.from_email
     msg["To"] = recipient.email
     msg.set_content(campaign.body)
     msg.add_alternative(html_body, subtype="html")
+    return msg
+
+
+def _send_via_smtp(
+    campaign: models.Campaign, recipient: models.Recipient, html_body: str, config: SmtpConfig
+) -> None:
+    msg = _build_message(campaign, recipient, html_body)
 
     try:
         if config.use_tls:
@@ -159,14 +256,48 @@ def _send_via_smtp(
     _mark_delivered(recipient)
 
 
-def _send_one(campaign: models.Campaign, recipient: models.Recipient, tracking_urls: dict, config: SmtpConfig) -> None:
+def _send_via_gmail_api(
+    campaign: models.Campaign, recipient: models.Recipient, html_body: str, config: GoogleSendConfig
+) -> None:
+    msg = _build_message(campaign, recipient, html_body)
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+
+    try:
+        resp = httpx.post(
+            GMAIL_SEND_URL,
+            headers={"Authorization": f"Bearer {config.access_token}", "Content-Type": "application/json"},
+            json={"raw": raw},
+            timeout=30,
+        )
+    except httpx.HTTPError as exc:
+        _mark_bounced(recipient, "soft", f"Gmail API request failed: {exc}")
+        return
+
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("error", {}).get("message", resp.text)
+        except ValueError:
+            detail = resp.text
+        # 400/403/404 are the recipient/message being rejected outright;
+        # 401 (expired/revoked token) and 5xx are worth retrying later.
+        bounce_type = "hard" if resp.status_code in (400, 403, 404) else "soft"
+        _mark_bounced(recipient, bounce_type, f"Gmail API {resp.status_code}: {detail}")
+        return
+
+    _mark_delivered(recipient)
+
+
+def _send_one(campaign: models.Campaign, recipient: models.Recipient, tracking_urls: dict, config: SendConfig) -> None:
     html_body = build_html_body(
         campaign.body,
         tracking_urls["clickBaseUrl"],
         tracking_urls["unsubscribeUrl"],
         tracking_urls["openPixelUrl"],
     )
-    _send_via_smtp(campaign, recipient, html_body, config)
+    if isinstance(config, GoogleSendConfig):
+        _send_via_gmail_api(campaign, recipient, html_body, config)
+    else:
+        _send_via_smtp(campaign, recipient, html_body, config)
 
 
 def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
@@ -206,7 +337,7 @@ def send_campaign_background(campaign_id: uuid.UUID, public_base_url: str) -> No
         if not campaign:
             return
 
-        config = resolve_smtp_config(db, campaign)
+        config = resolve_send_config(db, campaign)
         if not config:
             return  # no per-user mailbox and no default configured — leave "Scheduled"
 

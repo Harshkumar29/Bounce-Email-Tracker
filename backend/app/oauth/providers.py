@@ -55,7 +55,11 @@ class GoogleProvider(EmailProvider):
     AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
     TOKEN_URL = "https://oauth2.googleapis.com/token"
     USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-    SCOPES = "openid email profile"
+    # gmail.send lets campaigns actually send through this mailbox via the
+    # Gmail API once connected -- no app password needed. Requires the
+    # Gmail API enabled and this scope added under the OAuth consent
+    # screen's Data Access config in Google Cloud Console (see SETUP.md).
+    SCOPES = "openid email profile https://www.googleapis.com/auth/gmail.send"
 
     def __init__(self, client_id: str, client_secret: str):
         self.client_id = client_id

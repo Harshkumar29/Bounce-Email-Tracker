@@ -1,3 +1,32 @@
+// --------------------------------- Theme toggle ---------------------------------
+
+(function initTheme() {
+  const stored = (() => {
+    try {
+      return localStorage.getItem('theme');
+    } catch (err) {
+      return null;
+    }
+  })();
+  if (stored === 'light' || stored === 'dark') {
+    document.documentElement.setAttribute('data-theme', stored);
+  }
+
+  function toggleTheme() {
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const current = document.documentElement.getAttribute('data-theme') || (prefersDark ? 'dark' : 'light');
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try {
+      localStorage.setItem('theme', next);
+    } catch (err) {
+      /* ignore — per-viewer convenience only */
+    }
+  }
+
+  document.querySelectorAll('.theme-toggle').forEach((btn) => btn.addEventListener('click', toggleTheme));
+})();
+
 const form = document.getElementById('campaign-form');
 const submitBtn = document.getElementById('submit-btn');
 const formStatus = document.getElementById('form-status');

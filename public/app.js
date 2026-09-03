@@ -772,13 +772,32 @@ smtpForm.addEventListener('submit', async (e) => {
     use_tls: document.getElementById('smtpTls').checked,
   };
 
+  // The backend's own SMTP connection test can legitimately take several
+  // seconds (a real TLS handshake + login to another mail server) — give
+  // it real headroom before the browser gives up, rather than hanging
+  // indefinitely with no feedback.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
+
   try {
     const res = await fetch('/email-accounts/smtp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
-    const data = await res.json();
+
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      // Response wasn't JSON at all — e.g. a proxy/gateway timeout page —
+      // distinct from an actual network failure, worth telling apart.
+      emailAccountsMessage.textContent = `Unexpected response from the server (HTTP ${res.status}). This can happen if the SMTP test took too long — please try again.`;
+      emailAccountsMessage.classList.add('text-rose-400');
+      return;
+    }
+
     if (!res.ok) {
       emailAccountsMessage.textContent = extractErrorMessages(data);
       emailAccountsMessage.classList.add('text-rose-400');
@@ -790,9 +809,14 @@ smtpForm.addEventListener('submit', async (e) => {
     document.getElementById('smtpTls').checked = true;
     await loadEmailAccounts();
   } catch (err) {
-    emailAccountsMessage.textContent = 'Network error — is the server running?';
+    if (err.name === 'AbortError') {
+      emailAccountsMessage.textContent = 'The SMTP connection test timed out after 25s — the mail server may be slow or unreachable. Please try again.';
+    } else {
+      emailAccountsMessage.textContent = 'Network error — is the server running?';
+    }
     emailAccountsMessage.classList.add('text-rose-400');
   } finally {
+    clearTimeout(timeoutId);
     setButtonLoading(btn, false);
   }
 });

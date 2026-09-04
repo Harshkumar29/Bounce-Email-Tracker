@@ -34,6 +34,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 from pathlib import Path
 from typing import Optional, Union
 from urllib.parse import quote
@@ -134,6 +135,20 @@ def _refresh_google_access_token(db: Session, account: models.EmailAccount) -> O
     return access_token
 
 
+def suppressed_emails_for_user(db: Session, user_id) -> set[str]:
+    """Every address that has ever unsubscribed from one of this user's
+    campaigns -- resending to them without an explicit new opt-in violates
+    the same List-Unsubscribe promise the message headers make, so new
+    campaigns must not silently re-send to them."""
+    rows = (
+        db.query(models.Recipient.email)
+        .join(models.Campaign, models.Recipient.campaign_id == models.Campaign.id)
+        .filter(models.Campaign.user_id == user_id, models.Recipient.unsubscribed.is_(True))
+        .all()
+    )
+    return {email.strip().lower() for (email,) in rows}
+
+
 def resolve_send_config(db: Session, campaign: models.Campaign) -> Optional[SendConfig]:
     """Priority per campaign, matched by From Email against the owning
     user's connected accounts: Gmail API (no password ever needed) > the
@@ -229,20 +244,31 @@ def _mark_delivered(recipient: models.Recipient) -> None:
     recipient.delivered_at = now_utc()
 
 
-def _build_message(campaign: models.Campaign, recipient: models.Recipient, html_body: str) -> EmailMessage:
+def _build_message(
+    campaign: models.Campaign, recipient: models.Recipient, html_body: str, unsubscribe_url: str
+) -> EmailMessage:
     msg = EmailMessage()
     msg["Subject"] = campaign.campaign_name
     msg["From"] = campaign.from_email
     msg["To"] = recipient.email
+    # Missing Date/Message-ID is a strong spam signal on its own, and every
+    # major mailbox provider's 2024 bulk-sender rules (Gmail/Yahoo) require
+    # one-click List-Unsubscribe headers -- RFC 8058's mailto: form doesn't
+    # apply here since we don't run a mailbox to receive it, so this uses
+    # the https: form the recipient's mail client GETs directly.
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid()
+    msg["List-Unsubscribe"] = f"<{unsubscribe_url}>"
+    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     msg.set_content(campaign.body)
     msg.add_alternative(html_body, subtype="html")
     return msg
 
 
 def _send_via_smtp(
-    campaign: models.Campaign, recipient: models.Recipient, html_body: str, config: SmtpConfig
+    campaign: models.Campaign, recipient: models.Recipient, html_body: str, unsubscribe_url: str, config: SmtpConfig
 ) -> None:
-    msg = _build_message(campaign, recipient, html_body)
+    msg = _build_message(campaign, recipient, html_body, unsubscribe_url)
 
     try:
         if config.use_tls:
@@ -270,9 +296,9 @@ def _send_via_smtp(
 
 
 def _send_via_gmail_api(
-    campaign: models.Campaign, recipient: models.Recipient, html_body: str, config: GoogleSendConfig
+    campaign: models.Campaign, recipient: models.Recipient, html_body: str, unsubscribe_url: str, config: GoogleSendConfig
 ) -> None:
-    msg = _build_message(campaign, recipient, html_body)
+    msg = _build_message(campaign, recipient, html_body, unsubscribe_url)
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
     try:
@@ -308,9 +334,9 @@ def _send_one(campaign: models.Campaign, recipient: models.Recipient, tracking_u
         tracking_urls["openPixelUrl"],
     )
     if isinstance(config, GoogleSendConfig):
-        _send_via_gmail_api(campaign, recipient, html_body, config)
+        _send_via_gmail_api(campaign, recipient, html_body, tracking_urls["unsubscribeUrl"], config)
     else:
-        _send_via_smtp(campaign, recipient, html_body, config)
+        _send_via_smtp(campaign, recipient, html_body, tracking_urls["unsubscribeUrl"], config)
 
 
 def send_plain_email(to_email: str, subject: str, body_text: str) -> bool:
@@ -358,6 +384,10 @@ def send_campaign_background(campaign_id: uuid.UUID, public_base_url: str) -> No
         db.commit()
 
         for recipient in campaign.recipients:
+            if recipient.unsubscribed:
+                # Pre-suppressed (main.py's create_campaign already marked
+                # it) or unsubscribed mid-campaign -- never send to it.
+                continue
             tracking_urls = {
                 "openPixelUrl": f"{public_base_url}/track/open/{recipient.token}.gif",
                 "clickBaseUrl": f"{public_base_url}/track/click/{recipient.token}",

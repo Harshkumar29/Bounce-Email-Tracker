@@ -15,7 +15,7 @@ from .auth import get_current_user
 from .config import API_KEY, PUBLIC_BASE_URL
 from .crypto import decrypt_token, encrypt_token
 from .db import Base, SessionLocal, engine, get_db
-from .mailer import send_campaign_background
+from .mailer import send_campaign_background, suppressed_emails_for_user
 
 app = FastAPI(title="Bounce Email Tracker API")
 
@@ -124,10 +124,21 @@ def create_campaign(
     db.add(campaign)
     db.flush()  # get campaign.id before building recipient tokens
 
+    suppressed = suppressed_emails_for_user(db, current_user.id)
+    now = datetime.now(timezone.utc)
+
     for email in payload.toEmails:
         recipient_id = uuid.uuid4()
         token = encrypt_token({"campaignId": str(campaign.id), "recipientId": str(recipient_id)})
-        db.add(models.Recipient(id=recipient_id, campaign_id=campaign.id, email=email, token=token))
+        recipient = models.Recipient(id=recipient_id, campaign_id=campaign.id, email=email, token=token)
+        if email.strip().lower() in suppressed:
+            # Already unsubscribed from a previous campaign -- record it as
+            # such immediately rather than sending and letting it silently
+            # never show as delivered; send_campaign_background also skips
+            # it, so this is purely so the tracker reflects reality right away.
+            recipient.unsubscribed = True
+            recipient.unsubscribed_at = now
+        db.add(recipient)
 
     db.commit()
     db.refresh(campaign)
@@ -293,19 +304,35 @@ def track_click(token: str, request: Request, url: Optional[str] = None, db: Ses
     return RedirectResponse(url=target, status_code=302)
 
 
-@app.get("/track/unsubscribe/{token}", response_class=HTMLResponse)
-def track_unsubscribe(token: str, db: Session = Depends(get_db)):
+def _unsubscribe(token: str, db: Session) -> None:
     recipient = _find_recipient_by_token(db, token)
     if recipient:
         recipient.unsubscribed = True
         recipient.unsubscribed_at = datetime.now(timezone.utc)
         db.commit()
+
+
+@app.get("/track/unsubscribe/{token}", response_class=HTMLResponse)
+def track_unsubscribe(token: str, db: Session = Depends(get_db)):
+    _unsubscribe(token, db)
     return (
         "<!doctype html><meta charset='utf-8'><title>Unsubscribed</title>"
         "<body style=\"font-family:system-ui;padding:40px;text-align:center;color:#1c2333\">"
         "<h2>You have been unsubscribed</h2>"
         "<p>You will not receive further emails from this campaign.</p></body>"
     )
+
+
+@app.post("/track/unsubscribe/{token}")
+def track_unsubscribe_one_click(token: str, db: Session = Depends(get_db)):
+    # RFC 8058 one-click unsubscribe: Gmail/Yahoo POST here directly (no
+    # page render, no click-through) when a message carries both
+    # List-Unsubscribe and List-Unsubscribe-Post headers -- see mailer.py's
+    # _build_message. Returning 200 with an empty body is what the RFC
+    # expects; this endpoint existing at all is required for bulk-sender
+    # compliance even though most humans still land on the GET version.
+    _unsubscribe(token, db)
+    return Response(status_code=200)
 
 
 @app.get("/api/campaigns/{campaign_id}/recipients/{recipient_id}/clicks")

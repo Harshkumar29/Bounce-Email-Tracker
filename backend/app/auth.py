@@ -55,7 +55,7 @@ def set_session_cookie(response: Response, session: models.AppSession) -> None:
         key=SESSION_COOKIE_NAME,
         value=str(session.id),
         httponly=True,
-        secure=True,
+        secure=_COOKIE_SECURE,
         samesite="lax",
         max_age=int(SESSION_LIFETIME.total_seconds()),
         path="/",

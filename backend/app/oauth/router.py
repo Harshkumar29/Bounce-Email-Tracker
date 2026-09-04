@@ -5,6 +5,7 @@ the PROVIDER's authenticated identity, never the email string the user
 originally typed. If they don't match, the connection is refused outright.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,6 +21,8 @@ from .pkce import code_challenge_s256, generate_code_verifier, generate_state
 from .providers import get_provider
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
+
+log = logging.getLogger(__name__)
 
 STATE_LIFETIME = timedelta(minutes=10)
 
@@ -101,6 +104,10 @@ async def oauth_callback(
 
     token_result = await provider.exchange_code(code, code_verifier, redirect_uri)
     identity = await provider.get_identity(token_result.access_token)
+    log.info(
+        "oauth_callback: provider=%s email=%s scopes=%s has_refresh=%s",
+        provider_name, identity.email, token_result.scopes, bool(token_result.refresh_token),
+    )
 
     # --- The account-linking-attack guard (doc #15) ---
     # Compare what the PROVIDER says was authenticated against what the

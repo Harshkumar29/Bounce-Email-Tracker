@@ -5,11 +5,8 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 _loaded = load_dotenv(_env_path, override=True)
-
-DATABASE_URL = os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg://", 1)
 if not _loaded:
     import warnings
     warnings.warn(f".env file not found at {_env_path} — relying on system environment variables")

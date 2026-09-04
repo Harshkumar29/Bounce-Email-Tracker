@@ -208,8 +208,13 @@
           </div>
           <div>
             <label class="label-dark">From Email <span class="text-rose-400">*</span></label>
-            <input type="email" id="fromEmail" required class="input-dark" placeholder="sender@company.com" />
+            <select id="fromEmail" required class="input-dark">
+              <option value="" disabled selected>Loading connected mailboxes…</option>
+            </select>
             <small class="error text-rose-400 text-xs" data-error-for="fromEmail"></small>
+            <p id="fromEmail-hint" class="text-[11px] text-slate-500 mt-1 hidden">
+              <a href="#" onclick="navigate('accounts'); return false;" class="text-blue-400 hover:underline">Connect a mailbox</a> to send campaigns — a typed address that isn't connected can't actually send.
+            </p>
           </div>
         </div>
 

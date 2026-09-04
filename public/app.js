@@ -66,6 +66,7 @@ function navigate(viewName) {
   if (viewName === 'dashboard') loadDashboardData();
   if (viewName === 'campaigns') loadCampaignsData();
   if (viewName === 'accounts') loadEmailAccounts();
+  if (viewName === 'composer') loadFromEmailOptions();
 
   updateNav();
   refreshIcons();
@@ -691,6 +692,36 @@ detailModal.addEventListener('click', (e) => {
 const connectForm = document.getElementById('connect-form');
 const emailAccountsList = document.getElementById('email-accounts-list');
 const emailAccountsMessage = document.getElementById('email-accounts-message');
+
+async function loadFromEmailOptions() {
+  const select = document.getElementById('fromEmail');
+  const hint = document.getElementById('fromEmail-hint');
+  select.innerHTML = '<option value="" disabled selected>Loading…</option>';
+  hint.classList.add('hidden');
+
+  try {
+    const res = await fetch('/email-accounts');
+    if (!res.ok) throw new Error();
+    const accounts = await res.json();
+    const usable = accounts.filter((a) => a.is_verified && a.is_active);
+
+    if (!usable.length) {
+      select.innerHTML = '<option value="" disabled selected>No connected mailboxes</option>';
+      hint.classList.remove('hidden');
+      return;
+    }
+
+    select.innerHTML = usable
+      .map((a) => {
+        const label = a.provider === 'google' ? 'Gmail API' : a.provider === 'smtp' ? 'SMTP' : a.provider;
+        return `<option value="${escapeHtml(a.email_address)}">${escapeHtml(a.email_address)} (${label})</option>`;
+      })
+      .join('');
+  } catch (err) {
+    select.innerHTML = '<option value="" disabled selected>Failed to load mailboxes</option>';
+    hint.classList.remove('hidden');
+  }
+}
 
 async function loadEmailAccounts() {
   try {

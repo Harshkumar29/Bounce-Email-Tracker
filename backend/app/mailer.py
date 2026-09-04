@@ -25,6 +25,7 @@ accounts):
 
 import base64
 import html
+import logging
 import os
 import re
 import smtplib
@@ -47,6 +48,8 @@ from .db import SessionLocal
 from .models import now_utc
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+log = logging.getLogger(__name__)
 
 DEFAULT_SMTP_HOST = os.environ.get("SMTP_HOST")
 DEFAULT_SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
@@ -148,6 +151,12 @@ def resolve_send_config(db: Session, campaign: models.Campaign) -> Optional[Send
             )
             .first()
         )
+        log.info(
+            "resolve_send_config: campaign=%s from=%s google_account=%s scopes=%s",
+            campaign.id, normalized_from,
+            google_account.id if google_account else None,
+            google_account.oauth_credential.scopes if google_account and google_account.oauth_credential else None,
+        )
         if (
             google_account
             and google_account.oauth_credential
@@ -156,7 +165,9 @@ def resolve_send_config(db: Session, campaign: models.Campaign) -> Optional[Send
         ):
             token = _refresh_google_access_token(db, google_account)
             if token:
+                log.info("resolve_send_config: campaign=%s -> GoogleSendConfig", campaign.id)
                 return GoogleSendConfig(access_token=token)
+            log.warning("resolve_send_config: campaign=%s google token refresh failed, falling back", campaign.id)
             # Token refresh failed (revoked/expired refresh token) — fall
             # through to SMTP rather than silently not sending at all.
 
@@ -174,8 +185,10 @@ def resolve_send_config(db: Session, campaign: models.Campaign) -> Optional[Send
             cred = smtp_account.smtp_credential
             password = decrypt_secret(cred.smtp_password_encrypted)
             if password is not None:
+                log.info("resolve_send_config: campaign=%s -> SmtpConfig (user mailbox %s)", campaign.id, smtp_account.id)
                 return SmtpConfig(cred.smtp_host, cred.smtp_port, cred.smtp_username, password, cred.use_tls)
 
+    log.info("resolve_send_config: campaign=%s -> default SMTP fallback (no matching connected mailbox for %s)", campaign.id, normalized_from)
     return _default_smtp_config()
 
 
